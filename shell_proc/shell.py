@@ -50,6 +50,10 @@ def write_buffer(fp, bts):
     fp.flush()
 
 
+class ShellExit(Exception):
+    pass
+
+
 class Shell(object):
     """Continuous Shell process to run a series of commands."""
     is_windows = staticmethod(is_windows)
@@ -200,6 +204,8 @@ class Shell(object):
         # Check if running
         if not self.is_running():
             self.start()
+        elif not self.is_proc_running():
+            raise ShellExit('The internal shell process was closed and is no longer running!')
 
         # Convert the argument to text to run
         text = self.args_to_str(*args, **kwargs)
@@ -231,7 +237,7 @@ class Shell(object):
 
                         # print(msg.decode('utf-8', 'ignore'), end='', flush=True, file=self.get_file(pipe_name))
                         self.write_buffer(self.get_file(pipe_name), msg)
-                    except:
+                    except (ValueError, Exception):
                         pass
             except (BrokenPipeError, Exception):
                 break
@@ -240,9 +246,13 @@ class Shell(object):
         """Return if the continuous shell process is running."""
         return self.proc is not None
 
+    def is_proc_running(self):
+        """Return if the process is running."""
+        return self.proc is not None and self.proc.poll() is None
+
     def wait_for_finshed(self):
         """Wait until the task is finished running."""
-        while not self.is_finished('out'):  # and not self.is_finished('err')
+        while self.is_proc_running() and not self.is_finished('out'):  # and not self.is_finished('err')
             time.sleep(0.1)
 
     def start(self):
@@ -320,7 +330,11 @@ class Shell(object):
             success (bool)[True]: If True the call did not print any output to stderr.
                 If False there was some output printed to stderr.
         """
-        return self.run(*args, **kwargs)
+        try:
+            return self.run(*args, **kwargs)
+        except ShellExit as err:
+            # "from None" changes traceback to here without chaining
+            raise ShellExit(str(err)) from None
 
     def __enter__(self, stdout=None, stderr=None):
         """Enter to use for the 'with' context manager."""
