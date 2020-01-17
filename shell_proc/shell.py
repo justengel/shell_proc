@@ -61,18 +61,20 @@ class Shell(object):
     args_to_str = staticmethod(args_to_str)
     write_buffer = staticmethod(write_buffer)
 
-    def __init__(self, *tasks, stdout=None, stderr=None):
+    def __init__(self, *tasks, stdout=None, stderr=None, display_banner=False, **kwargs):
         """Initialize the Shell object.
 
         Args:
             *tasks (tuple/str/object): List of string commands to run.
             stdout (io.TextIOWrapper/object)[None]: Standard out to redirect the separate process standard out to.
             stderr (io.TextIOWrapper/object)[None]: Standard error to redirect the separate process standard out to.
+            display_banner (bool)[False]: If True display the shell banner when the shell starts.
         """
         # Public Variables
         self.stdout = None
         self.stderr = None
         self.proc = None
+        self.display_banner = display_banner
 
         # Private Variables
         self._last_task = b''
@@ -135,11 +137,37 @@ class Shell(object):
         except:
             return ''
 
+    def filter_stdout(self, stdout=None):
+        """Strip out the start and end of stdout to only display the output from the command."""
+        if stdout is None:
+            stdout = self.get_stdout()
+        cmd = self._last_task
+        if isinstance(cmd, bytes):
+            cmd = cmd.decode('utf-8')
+
+        idx = stdout.find(cmd)
+        if idx != -1:
+            stdout = stdout[idx + len(cmd):]
+
+        last_newline = stdout[:-1].rfind('\n')
+        if last_newline != -1:
+            stdout = stdout[:last_newline + 1]
+        return stdout
+
+    def clear_stdout(self):
+        """Try to clear the stdout"""
+        stdout = self.filter_stdout()
+        try:
+            self.stdout.truncate(0)
+        except:
+            pass
+        return stdout
+
     def print_stdout(self, file=None):
         """Print the collected stdout."""
         if file is None:
             file = sys.stdout
-        print(self.get_stdout(), file=file)
+        print(self.clear_stdout(), file=file, flush=True)
 
     def get_stderr(self):
         """Return the read text from stderr."""
@@ -153,11 +181,37 @@ class Shell(object):
         except:
             return ''
 
+    def filter_stderr(self, stderr=None):
+        """Strip out the start and end of stderr to only display the error from the command."""
+        if stderr is None:
+            stderr = self.get_stderr()
+        return stderr
+
+    def clear_stderr(self):
+        """Try to clear the stderr"""
+        stderr = self.filter_stderr()
+        try:
+            self.stderr.truncate(0)
+        except:
+            pass
+        return stderr
+
     def print_stderr(self, file=None):
         """Print the collected stderr."""
         if file is None:
             file = sys.stderr
-        print(self.get_stderr(), file=file)
+        print(self.clear_stderr(), file=file, flush=True)
+
+    def print_results(self, stdout=None, stderr=None):
+        """Print stdout and stderr."""
+        if self.has_print_err():
+            if stderr is None:
+                stderr = sys.stderr
+            print(self.clear_stderr(), file=stderr, flush=True)
+        if self.has_print_out():
+            if stdout is None:
+                stdout = sys.stdout
+            print(self.clear_stdout(), file=stdout, flush=True)
 
     def set_flags(self, pipe_name, msg):
         """Set if the given pipe has any printable output."""
@@ -167,6 +221,7 @@ class Shell(object):
         # ===== Check the finished flag =====
         if not getattr(self, finish_name, False) and msg.endswith(b'>\n'):
             setattr(self, finish_name, True)
+            return
 
         # ===== Check the has_print flag =====
         has_msg = msg.strip()
@@ -266,6 +321,14 @@ class Shell(object):
         else:
             self.proc = Popen('/bin/bash', stdin=PIPE, stdout=PIPE, stderr=PIPE, shell=False)
 
+        # Temporary remove stdout and stderr
+        stdout = self.stdout
+        stderr = self.stderr
+        if not self.display_banner:
+            self.stdout = None
+            self.stderr = None
+
+        # Start stderr and stdout threads
         self._th_out = threading.Thread(target=self._read_pipe, args=('out', self.proc.stdout))
         self._th_out.daemon = True
         self._th_out.start()
@@ -275,9 +338,16 @@ class Shell(object):
         self._th_err.start()
         atexit.register(self.stop)
 
-        # Reset the task flags and remove the initial output message
+        # Remove shell banner items
         time.sleep(0.1)
-        self.reset_flags()
+        self.reset_flags()  # Reset output task flags
+        if not self.display_banner:
+            self.clear_stderr()
+            self.clear_stdout()
+            self.stdout = stdout
+            self.stderr = stderr
+
+        return self
 
     def stop(self):
         """Stop the continuous shell process."""
@@ -305,6 +375,7 @@ class Shell(object):
         self._th_out = None
         self._th_err = None
         self.proc = None
+        return self
 
     def close(self):
         """Close the continuous shell process."""
