@@ -1,4 +1,5 @@
 import io
+import os
 import sys
 import platform
 import time
@@ -7,7 +8,7 @@ import atexit
 from subprocess import Popen, PIPE
 
 
-__all__ = ['is_windows', 'is_linux', 'args_to_str', 'write_buffer', 'Shell']
+__all__ = ['is_windows', 'is_linux', 'args_to_str', 'write_buffer', 'ShellExit', 'Command', 'Shell']
 
 
 def is_windows():
@@ -30,8 +31,7 @@ def args_to_str(*args, **kwargs):
             text += ' '
         text += ' '.join(('--{} {}'.format(k, v) for k, v in kwargs.items()))
 
-    if not text.endswith('\n'):
-        text += '\n'
+    text = text.rstrip()
     return text
 
 
@@ -51,7 +51,46 @@ def write_buffer(fp, bts):
 
 
 class ShellExit(Exception):
+    """Exception to indicate the Shell exited through some shell command."""
     pass
+
+
+class Command(object):
+    """Command that was run with the results."""
+    def __init__(self, cmd='', exit_code=-1, stdout='', stderr=''):
+        self.cmd = cmd
+        self.exit_code = exit_code
+        self.stdout = stdout
+        self.stderr = stderr
+
+    def add_pipe_data(self, pipe_name, data):
+        """Add output data to the proper file/pipe handler."""
+        if not pipe_name.startswith('std'):
+            pipe_name = 'std' + pipe_name
+        if isinstance(data, bytes):
+            data = data.decode('utf-8', 'replace')
+        setattr(self, pipe_name, getattr(self, pipe_name, '') + data)
+
+    def has_output(self):
+        """Return if this command has any stdout."""
+        return bool(self.stdout)
+
+    def has_error(self):
+        """Return if this command has any stderr."""
+        return bool(self.stderr)
+
+    def is_finished(self):
+        """Return if this command finished."""
+        return self.exit_code != -1
+
+    def __str__(self):
+        return self.cmd
+
+    def __bytes__(self):
+        return self.cmd.encode('utf-8')
+
+    def __int__(self):
+        return self.exit_code
 
 
 class Shell(object):
@@ -61,27 +100,35 @@ class Shell(object):
     args_to_str = staticmethod(args_to_str)
     write_buffer = staticmethod(write_buffer)
 
-    def __init__(self, *tasks, stdout=None, stderr=None, display_banner=False, **kwargs):
+    NEWLINE = os.linesep
+
+    def __init__(self, *tasks, stdout=None, stderr=None, blocking=True, wait_on_exit=True, close_on_exit=True,
+                 **kwargs):
         """Initialize the Shell object.
 
         Args:
             *tasks (tuple/str/object): List of string commands to run.
             stdout (io.TextIOWrapper/object)[None]: Standard out to redirect the separate process standard out to.
             stderr (io.TextIOWrapper/object)[None]: Standard error to redirect the separate process standard out to.
-            display_banner (bool)[False]: If True display the shell banner when the shell starts.
+            blocking (bool)[True]: If False write to stdin without waiting for the previous command to finish.
+            wait_on_exit (bool)[True]: If True on context manager exit wait for all commands to finish.
+            close_on_exit (bool)[True]: If True close the process when the context manager exits. This may be useful
+                to be false for running multiple processes. Method "wait" can always be called to wait for all commands.
         """
         # Public Variables
         self.stdout = None
         self.stderr = None
         self.proc = None
-        self.display_banner = display_banner
+        self._blocking = blocking
+        self.wait_on_exit = wait_on_exit
+        self.close_on_exit = close_on_exit
 
-        # Private Variables
-        self._last_task = b''
-        self._finished_out = False
-        self._finished_err = False
-        self._has_out = False
-        self._has_err = False
+        self.history = []
+        self._finished_count = 0
+        self._end_command = '=========== SHELL END COMMAND =========='
+        self._end_command_bytes = self._end_command.encode('utf-8')
+
+        # Private Variabless
         self._th_out = None
         self._th_err = None
 
@@ -100,150 +147,86 @@ class Shell(object):
         var_name = 'std{}'.format(pipe_name)
         return getattr(self, var_name, None)
 
-    def is_finished(self, pipe_name):
-        """Return if the finished flag was set for the given pipe_name (self._finished_out or self._finished_err)."""
-        var_name = '_finished_{}'.format(pipe_name)
-        return getattr(self, var_name, False)
+    def is_blocking(self):
+        """Return if the commands are blocking."""
+        return self._blocking
 
-    def has_print(self, pipe_name):
-        """Return if the given pipe name had printable output from the previous command."""
-        var_name = '_has_{}'.format(pipe_name)
-        return getattr(self, var_name, False)
+    def set_blocking(self, blocking):
+        """Set if the commands are blocking.
 
-    def has_print_out(self):
-        """Return if the previous command had any printable output. This is always True, because the end terminal line
-        is always sent to be printed after the command runs.
+        If True each shell command will wait until the command is complete.
+
+        Args:
+            blocking (bool): If the shell should block and wait for each command.
         """
-        return self._has_out
+        self._blocking = blocking
 
-    def has_print_err(self):
-        """Return if the previous command had any error output.
-
-        Warning:
-            This may not mean an error occurred. It just means that printable output was sent to stderr. A warning
-            could have been printed instead of an error.
-        """
-        return self._has_err
-
-    def get_stdout(self):
-        """Return the read text from stdout."""
+    @property
+    def current_command(self):
+        """Return the current command that is still running or was last_completed."""
         try:
-            if self.stdout.seekable():
-                self.stdout.seek(0)
-            out = self.stdout.read()
-            if not isinstance(out, str):
-                out = out.decode('utf-8')
-            return out
-        except:
-            return ''
+            idx = -1
+            if not self.is_finished():
+                idx = self._finished_count
+            return self.history[idx]
+        except (IndexError, KeyError, TypeError, AttributeError):
+            return None
 
-    def filter_stdout(self, stdout=None):
-        """Strip out the start and end of stdout to only display the output from the command."""
-        if stdout is None:
-            stdout = self.get_stdout()
-        cmd = self._last_task
-        if isinstance(cmd, bytes):
-            cmd = cmd.decode('utf-8')
-
-        idx = stdout.find(cmd)
-        if idx != -1:
-            stdout = stdout[idx + len(cmd):]
-
-        last_newline = stdout[:-1].rfind('\n')
-        if last_newline != -1:
-            stdout = stdout[:last_newline + 1]
-        return stdout
-
-    def clear_stdout(self):
-        """Try to clear the stdout"""
-        stdout = self.filter_stdout()
+    @property
+    def last_command(self):
+        """Return the last task that was sent to run."""
         try:
-            self.stdout.truncate(0)
-        except:
-            pass
-        return stdout
+            return self.history[-1]
+        except (IndexError, KeyError, TypeError, AttributeError):
+            return None
 
-    def print_stdout(self, file=None):
-        """Print the collected stdout."""
-        if file is None:
-            file = sys.stdout
-        print(self.clear_stdout(), file=file, flush=True)
-
-    def get_stderr(self):
-        """Return the read text from stderr."""
+    @property
+    def exit_code(self):
+        """Return the exit code for the last command."""
         try:
-            if self.stderr.seekable():
-                self.stderr.seek(0)
-            out = self.stderr.read()
-            if not isinstance(out, str):
-                out = out.decode('utf-8')
-            return out
-        except:
-            return ''
+            return self.last_command.exit_code
+        except (IndexError, KeyError, TypeError, AttributeError):
+            return -1
 
-    def filter_stderr(self, stderr=None):
-        """Strip out the start and end of stderr to only display the error from the command."""
-        if stderr is None:
-            stderr = self.get_stderr()
-        return stderr
+    def get_end_command(self):
+        """Return the end command as a string"""
+        return self._end_command
 
-    def clear_stderr(self):
-        """Try to clear the stderr"""
-        stderr = self.filter_stderr()
-        try:
-            self.stderr.truncate(0)
-        except:
-            pass
-        return stderr
+    def get_end_command_bytes(self):
+        """Return the end command as bytes"""
+        return self._end_command_bytes
 
-    def print_stderr(self, file=None):
-        """Print the collected stderr."""
-        if file is None:
-            file = sys.stderr
-        print(self.clear_stderr(), file=file, flush=True)
+    def set_end_command(self, value):
+        """Set the end command string."""
+        if isinstance(value, bytes):
+            self._end_command_bytes = value
+            self._end_command = self._end_command_bytes.decode('utf-8', 'replace')
+        else:
+            self._end_command = str(value)
+            self._end_command_bytes = self._end_command.encode('utf-8')
 
-    def print_results(self, stdout=None, stderr=None):
-        """Print stdout and stderr."""
-        if self.has_print_err():
-            if stderr is None:
-                stderr = sys.stderr
-            print(self.clear_stderr(), file=stderr, flush=True)
-        if self.has_print_out():
-            if stdout is None:
-                stdout = sys.stdout
-            print(self.clear_stdout(), file=stdout, flush=True)
+    end_command = property(get_end_command, set_end_command)
+    end_command_bytes = property(get_end_command_bytes, set_end_command)
 
-    def set_flags(self, pipe_name, msg):
-        """Set if the given pipe has any printable output."""
-        has_name = '_has_{}'.format(pipe_name)
-        finish_name = '_finished_{}'.format(pipe_name)
-
-        # ===== Check the finished flag =====
-        if not getattr(self, finish_name, False) and msg.endswith(b'>\n'):
-            setattr(self, finish_name, True)
-            return
-
-        # ===== Check the has_print flag =====
-        has_msg = msg.strip()
-        is_first = has_msg.endswith(self._last_task.strip())
-
-        # Check if can set. Do not count the last line sent to stdout.
-        if (not self.is_finished(pipe_name) and not getattr(self, has_name, False)) and not is_first and has_msg:
-            setattr(self, has_name, True)
-
-    def reset_flags(self):
-        """Reset the task flags."""
-        self._finished_out = False
-        self._finished_err = False
-        self._has_out = False
-        self._has_err = False
+    def get_echo_end_command(self):
+        """Return the echo end command used to determine when the command finshed."""
+        if self.is_windows():
+            return b'echo ' + self.end_command_bytes + b' %errorlevel%'
+        else:
+            return b'echo "' + self.end_command_bytes + b' $?"'
 
     def _run(self, text_cmd):
         """Run the given text command."""
         # Write input to run command
-        self._last_task = str(text_cmd).encode('utf-8') + b'\n'
-        self.proc.stdin.write(self._last_task)
+        cmd = Command(str(text_cmd))
+        self.history.append(cmd)
+
+        # Run the command and the echo command to get the results
+        self.proc.stdin.write(cmd.cmd.encode('utf-8') + self.NEWLINE.encode('utf-8'))
+        self.proc.stdin.write(self.get_echo_end_command() + self.NEWLINE.encode('utf-8'))
         self.proc.stdin.flush()
+
+        return cmd
 
     def run(self, *args, **kwargs):
         """Run the given task.
@@ -265,37 +248,87 @@ class Shell(object):
         # Convert the argument to text to run
         text = self.args_to_str(*args, **kwargs)
 
-        # Set flags
-        self.reset_flags()
-
         # Run the command
         self._run(text)
 
         # Check for completion
-        self.wait_for_finshed()
+        if self.is_blocking():
+            self.wait()
 
-        return not self.has_print_err()
+        return self.last_command
 
-    def _read_pipe(self, pipe_name, pipe):
+    @staticmethod
+    def read_pipe(pipe, callback=None):
         """Continuously read the given pipe.
 
         Args:
-            pipe_name (str): Name of the pipe for variables ('out' or 'err' for self.stdout and self._finished_out).
             pipe (io.TextIOOWrapper): File object/buffer from the subprocess to read from and redirect.
+            callback (function/callable)[None]: Function that handles the data read from the pipe.
         """
+        if not callable(callback):
+            callback = lambda msg: None
+
         while True:
             try:
                 # Read the incoming lines from the PIPE
                 for msg in pipe:
                     try:
-                        self.set_flags(pipe_name, msg)
-
-                        # print(msg.decode('utf-8', 'ignore'), end='', flush=True, file=self.get_file(pipe_name))
-                        self.write_buffer(self.get_file(pipe_name), msg)
-                    except (ValueError, Exception):
+                        callback(msg)
+                    except (ValueError, TypeError, Exception):
                         pass
             except (BrokenPipeError, Exception):
                 break
+
+    def check_ouptut(self, msg):
+        """Check the output message.
+
+        Returns:
+            msg (bytes): Output message to parse.
+        """
+        # ===== Check the finished flag =====
+        end_cmd = self.end_command_bytes
+        if end_cmd in msg:  # Ignore all "echo END_COMMAND"
+            try:
+                idx = msg.index(end_cmd)
+                exit_code = int(msg[idx+len(end_cmd):].strip().decode('utf-8'))  # If no exit code it is an echo of cmd
+                self.history[self._finished_count].exit_code = exit_code
+                self._finished_count += 1
+            except:
+                pass
+            return False
+
+        # ===== Check the has_print flag =====
+        has_msg = msg.strip()
+        try:
+            is_not_cmd = not has_msg.endswith(bytes(self.current_command))
+        except (AttributeError, TypeError, ValueError, Exception):
+            is_not_cmd = False
+
+        # Check if there is output and that the output is not from the stdin running the command (Windows).
+        if not self.is_finished() and has_msg and is_not_cmd:
+            try:
+                self.history[self._finished_count].add_pipe_data('out', msg)
+            except:
+                pass
+            try:
+                self.write_buffer(self.stdout, msg)
+            except:
+                pass
+
+    def check_error(self, msg):
+        """Check the error message.
+
+        Returns:
+            msg (bytes): Error message to parse.
+        """
+        try:
+            self.history[self._finished_count].add_pipe_data('err', msg)
+        except:
+            pass
+        try:
+            self.write_buffer(self.stderr, msg)
+        except:
+            pass
 
     def is_running(self):
         """Return if the continuous shell process is running."""
@@ -305,10 +338,16 @@ class Shell(object):
         """Return if the process is running."""
         return self.proc is not None and self.proc.poll() is None
 
-    def wait_for_finshed(self):
-        """Wait until the task is finished running."""
-        while self.is_proc_running() and not self.is_finished('out'):  # and not self.is_finished('err')
+    def is_finished(self):
+        """Return if """
+        return len(self.history) <= self._finished_count
+
+    def wait(self):
+        """Wait until all of the commands are finished or until the process exits."""
+        while self.is_proc_running() and not self.is_finished():
+            # and not self.is_finished('err')
             time.sleep(0.1)
+        return self
 
     def start(self):
         """Start the continuous shell process."""
@@ -317,40 +356,31 @@ class Shell(object):
 
         # Create the continuous terminal process
         if self.is_windows():
-            self.proc = Popen('cmd.exe', stdin=PIPE, stdout=PIPE, stderr=PIPE, shell=False)
+            # /K run command and remain (disables the banner)
+            self.proc = Popen('cmd.exe /K', stdin=PIPE, stdout=PIPE, stderr=PIPE, shell=False)
         else:
             self.proc = Popen('/bin/bash', stdin=PIPE, stdout=PIPE, stderr=PIPE, shell=False)
 
-        # Temporary remove stdout and stderr
-        stdout = self.stdout
-        stderr = self.stderr
-        if not self.display_banner:
-            self.stdout = None
-            self.stderr = None
+        # Command count
+        self.history = []
+        self._finished_count = 0
 
         # Start stderr and stdout threads
-        self._th_out = threading.Thread(target=self._read_pipe, args=('out', self.proc.stdout))
+        self._th_out = threading.Thread(target=self.read_pipe, args=(self.proc.stdout, self.check_ouptut))
         self._th_out.daemon = True
         self._th_out.start()
 
-        self._th_err = threading.Thread(target=self._read_pipe, args=('err', self.proc.stderr))
+        self._th_err = threading.Thread(target=self.read_pipe, args=(self.proc.stderr, self.check_error))
         self._th_err.daemon = True
         self._th_err.start()
         atexit.register(self.stop)
 
-        # Remove shell banner items
         time.sleep(0.1)
-        self.reset_flags()  # Reset output task flags
-        if not self.display_banner:
-            self.clear_stderr()
-            self.clear_stdout()
-            self.stdout = stdout
-            self.stderr = stderr
 
         return self
 
     def stop(self):
-        """Stop the continuous shell process."""
+        """Stop the continuous shell process. This method does not wait and closes everything immediately."""
         try:
             atexit.unregister(self.stop)
         except:
@@ -378,13 +408,14 @@ class Shell(object):
         return self
 
     def close(self):
-        """Close the continuous shell process."""
+        """Close the continuous shell process. This method does not wait and closes everything immediately."""
         try:
             self.stop()
         except:
             pass
 
     def __del__(self):
+        """Close the continuous shell process. This method does not wait and closes everything immediately."""
         try:
             self.close()
         except:
@@ -420,5 +451,9 @@ class Shell(object):
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Exit the 'with' context manager."""
-        self.close()
+        # Check to wait on context manager exit even if non blocking
+        if self.wait_on_exit:
+            self.wait()
+        if self.close_on_exit:
+            self.close()
         return exc_type is None

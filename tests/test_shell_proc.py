@@ -8,11 +8,17 @@ def test_simple():
         # Create a directory storage and make a virtual environment in storage with the requests library installed
         sh('mkdir storage')
         sh('cd storage')
-        sh('python -m venv ./myvenv')
+        sh('echo Hello World! > hello.txt')
+
         if sh.is_windows():
-            sh('call .\\myvenv\\Scripts\\activate.bat')
+            sh('python -m venv ./winvenv')
+            sh('call ./winvenv/Scripts/activate.bat')
         else:
-            sh('source ./myvenv/bin/activate')
+            pwd = sh('pwd')
+            sh('cd ~')
+            sh('python3 -m venv ./lxvenv')
+            sh('source ./lxvenv/bin/activate')
+            sh('cd {}'.format(pwd.stdout))
         sh('pip -V')
         sh('pip install requests')
         sh('pip list')
@@ -26,21 +32,29 @@ def test_has_err():
         print('\n========== Begin Shell has_err ==========')
         # Create a directory storage and make a virtual environment in storage with the requests library installed
         sh('mkdir storage')
-        print('mkdir storage', '>>', sh.has_print_err())  # Directory may exist
+        print('mkdir storage', '>>', sh.last_command.stderr)  # Directory may exist
         sh('cd storage')
-        print('cd storage', '>>', sh.has_print_err())
-        sh('python -m venv ./myvenv')
-        print('python -m venv ./myvenv', '>>', sh.has_print_err())
+        print('cd storage', '>>', sh.last_command.stderr)
+        sh('echo Hello World! > hello.txt')
+        print('echo Hello World! > hello.txt', '>>', sh.last_command.stderr)
+
         if sh.is_windows():
-            sh('call .\\myvenv\\Scripts\\activate.bat')
+            sh('python -m venv ./winvenv')
+            print('python -m venv ./winvenv', '>>', sh.last_command.stderr)
+            sh('call ./winvenv/Scripts/activate.bat')
         else:
-            sh('source ./myvenv/bin/activate')
+            pwd = sh('pwd')
+            sh('cd ~')
+            sh('python3 -m venv ./lxvenv')
+            print('python3 -m venv ./lxvenv', '>>', sh.last_command.stderr)
+            sh('source ./lxvenv/bin/activate')
+            sh('cd {}'.format(pwd.stdout))
         sh('pip -V')
-        print('pip -V', '>>', sh.has_print_err())
+        print('pip -V', '>>', sh.last_command.stderr)
         sh('pip install requests')
-        print('pip install requests', '>>', sh.has_print_err())  # Possible stderr message to update pip
+        print('pip install requests', '>>', sh.last_command.stderr)  # Possible stderr message to update pip
         sh('pip list')
-        print('pip list', '>>', sh.has_print_err())  # Possible stderr message to update pip
+        print('pip list', '>>', sh.last_command.stderr)  # Possible stderr message to update pip
     print('========== End Shell ==========')
 
 
@@ -52,28 +66,37 @@ def test_has_out():
         print('\n========== Begin Shell has_out ==========')
         # Create a directory storage and make a virtual environment in storage with the requests library installed
         sh('mkdir storage')
-        print('mkdir storage', '>>', sh.has_print_out())
+        print('mkdir storage', '>>', sh.last_command.stdout)
         sh('cd storage')
-        print('cd storage', '>>', sh.has_print_out())
-        sh('python -m venv ./myvenv')
-        print('python -m venv ./myvenv', '>>', sh.has_print_out())
-        if sh.is_windows():
-            sh('call .\\myvenv\\Scripts\\activate.bat')
-        else:
-            sh('source ./myvenv/bin/activate')
-        sh('pip -V')
-        print('pip -V', '>>', sh.has_print_out())
-        sh('pip install requests')
-        print('pip install requests', '>>', sh.has_print_out())
-        sh('pip list')
-        print('pip list', '>>', sh.has_print_out())
+        print('cd storage', '>>', sh.last_command.stdout)
+        sh('echo Hello World! > hello.txt')
+        print('echo Hello World! > hello.txt', '>>', sh.last_command.stdout)
 
-        out = sh.get_stdout()  # All text saved to stdout from the subprocess terminal commands
+        if sh.is_windows():
+            sh('python -m venv ./winvenv')
+            print('python -m venv ./winvenv', '>>', sh.last_command.stdout)
+            sh('call ./winvenv/Scripts/activate.bat')
+        else:
+            pwd = sh('pwd')
+            sh('cd ~')
+            sh('python3 -m venv ./lxvenv')
+            print('python3 -m venv ./lxvenv', '>>', sh.last_command.stdout)
+            sh('source ./lxvenv/bin/activate')
+            sh('cd {}'.format(pwd.stdout))
+        sh('pip -V')
+        print('pip -V', '>>', sh.last_command.stdout)
+        sh('pip install requests')
+        print('pip install requests', '>>', sh.last_command.stdout)
+        sh('pip list')
+        print('pip list', '>>', sh.last_command.stdout)
+
+        sh.stdout.seek(0)
+        out = sh.stdout.read()  # All text saved to stdout from the subprocess terminal commands
         assert out != ''
     print('========== End Shell ==========')
 
 
 if __name__ == '__main__':
     test_simple()
-    # test_has_err()
-    # test_has_out()
+    test_has_err()
+    test_has_out()
