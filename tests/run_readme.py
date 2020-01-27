@@ -1,5 +1,19 @@
 
 
+def run_simple_result():
+    from shell_proc import Shell
+
+    with Shell() as sh:
+        sh('cd ..')
+        if sh.is_windows():
+            cmd = sh('dir')
+        else:
+            cmd = sh('ls')
+
+        # cmd (Command) Attributes: cmd, exit_code, stdout, stderr
+        print(cmd.stdout)
+
+
 def run_context_manager():
     import sys
     from shell_proc import Shell
@@ -51,6 +65,7 @@ def run_non_blocking():
             sh('cd {}'.format(pwd.stdout))
         sh('pip install requests')
         sh('pip list')
+        print('---------- At exit (shows non-blocking until exit) ----------')
 
     table = '|{:_<20}|{:_<20}|{:_<20}|{:_<50}|'
     print(table.format('', '', '', '').replace('|', '_'))
@@ -109,6 +124,7 @@ def run_manual():
 
 
 if __name__ == '__main__':
+    # run_simple_result()
     # run_context_manager()
     # run_non_blocking()
     run_manual()

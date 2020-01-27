@@ -279,7 +279,7 @@ class Shell(object):
             except (BrokenPipeError, Exception):
                 break
 
-    def check_ouptut(self, msg):
+    def check_output(self, msg):
         """Check the output message.
 
         Returns:
@@ -366,7 +366,7 @@ class Shell(object):
         self._finished_count = 0
 
         # Start stderr and stdout threads
-        self._th_out = threading.Thread(target=self.read_pipe, args=(self.proc.stdout, self.check_ouptut))
+        self._th_out = threading.Thread(target=self.read_pipe, args=(self.proc.stdout, self.check_output))
         self._th_out.daemon = True
         self._th_out.start()
 

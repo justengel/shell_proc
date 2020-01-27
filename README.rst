@@ -13,6 +13,23 @@ Install
 Run
 ===
 
+Run a series of commands with results.
+
+.. code-block:: python
+
+    from shell_proc import Shell
+
+    with Shell() as sh:
+        sh('cd ..')
+        if sh.is_windows():
+            cmd = sh('dir')
+        else:
+            cmd = sh('ls')
+
+        # cmd (Command) Attributes: cmd, exit_code, stdout, stderr
+        print(cmd.stdout)
+
+
 Run a series of terminal commands.
 
 .. code-block:: python
@@ -70,6 +87,7 @@ Run without blocking every command
             sh('cd {}'.format(pwd.stdout))
         sh('pip install requests')
         sh('pip list')
+        print('---------- At exit (shows non-blocking until exit) ----------')
 
     time.sleep(1)
     print('1 Second has passed', 'Running:', sh.current_command)
