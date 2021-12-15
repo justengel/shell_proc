@@ -37,22 +37,30 @@ def run_shell():
 
 def run_command_pipe():
     import sys
-    from shell_proc import Shell, ShellExit, shell_args
+    from shell_proc import Shell, ShellExit, shell_args, quote
 
     with Shell(stdout=sys.stdout, stderr=sys.stderr) as sh:
         # One step
-        results = sh('dir') | 'find "run"'  # Hard to tell where find output starts
-        assert 'run_subprocess.py' in results.stdout
+        if sh.is_windows():
+            results = sh('dir') | 'find "run"'  # Hard to tell where find output starts
+        else:
+            results = sh('ls -al') | 'grep "run"'
+        assert 'run_subprocess.py' in results.stdout, results.stdout
 
         # Two Steps
-        cmd = sh('dir')
-        print('\nRUN PIPE')
-        results = cmd | 'find "run"'
+        if sh.is_windows():
+            cmd = sh('dir')
+            print('\nRUN PIPE')
+            results = cmd | 'find "run"'
+        else:
+            cmd = sh('ls -al')
+            print('\nRUN PIPE')
+            results = cmd | 'grep "run"'
         assert 'run_subprocess.py' in results.stdout
 
 
 if __name__ == '__main__':
-    run_subprocess()
-    run_shell()
+    # run_subprocess()
+    # run_shell()
     run_command_pipe()
 

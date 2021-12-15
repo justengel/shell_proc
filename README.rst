@@ -191,7 +191,7 @@ Added support to call python in a subprocess
 
     from shell_proc import Shell
 
-    with Shell() as sh:
+    with Shell(python_call='python3') as sh:
         sh.python('-c',
                   'import os',
                   'print("My PID:", os.getpid())')

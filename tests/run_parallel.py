@@ -5,7 +5,13 @@ def run_parallel():
     import time
     from shell_proc import Shell, python_args
 
+    if Shell.is_linux():
+        python_args.PYTHON = 'python3'
+
     with Shell(stdout=sys.stdout, stderr=sys.stderr) as sh:
+        # if sh.is_linux():  # This wont work with parallel due to a new shell being created.
+        #     sh('alias python=python3')
+
         start = time.time()
         sh.parallel(*(python_args('-c',
                     'import os',
@@ -20,7 +26,13 @@ def run_parallel_context():
     import time
     from shell_proc import Shell, python_args
 
-    with Shell(stdout=sys.stdout, stderr=sys.stderr) as sh:
+    if Shell.is_linux():
+        python_args.PYTHON = 'python3'
+
+    with Shell(stdout=sys.stdout, stderr=sys.stderr, shell=True) as sh:
+        # if sh.is_linux():  # This wont work with parallel due to a new shell being created.
+        #     sh('alias python=python3')
+
         with sh.parallel() as p:
             for i in range(10):
                 if i == 3:

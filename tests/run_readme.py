@@ -31,7 +31,7 @@ def run_context_manager():
             sh('cd ~')
             sh('python3 -m venv ./lxvenv')
             sh('source ./lxvenv/bin/activate')
-            sh('cd {}'.format(pwd.stdout))
+            sh('cd {}'.format(pwd.stdout.strip()))
         sh('pip install requests')
         sh('pip list')
 
@@ -41,6 +41,7 @@ def run_context_manager():
     print(table.format('', '', '', ''))
     for cmd in sh.history:
         print(table.format(cmd.exit_code, cmd.has_error(), cmd.has_output(), cmd.cmd).replace('_', ' '))
+        x = 1
     print(table.format('', '', '', '').replace('|', '_'))
 
 
@@ -127,7 +128,7 @@ def run_python():
     import sys
     from shell_proc import Shell
 
-    with Shell(stdout=sys.stdout, stderr=sys.stderr) as sh:
+    with Shell(stdout=sys.stdout, stderr=sys.stderr, python_call='python3') as sh:
         sh.python('-c',
                   'import os',
                   'print("My PID:", os.getpid())')
@@ -138,11 +139,12 @@ def run_parallel():
     import time
     from shell_proc import Shell, python_args
 
-    with Shell(stdout=sys.stdout, stderr=sys.stderr) as sh:
+    with Shell(stdout=sys.stdout, stderr=sys.stderr, python_call='python3') as sh:
         p = sh.parallel(*(python_args('-c',
-                    'import os',
-                    'import time',
-                    "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i)) for i in range(10)))
+                                      'import os',
+                                      'import time',
+                                      "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i),
+                                      python_call='python3') for i in range(10)))
         sh.wait()  # or p.wait()
         print('finished parallel')
         time.sleep(1)
@@ -151,15 +153,17 @@ def run_parallel():
         for i in range(10):
             if i == 3:
                 t = python_args('-c',
-                    'import os',
-                    'import time',
-                    'time.sleep(1)',
-                    "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i))
+                                'import os',
+                                'import time',
+                                'time.sleep(1)',
+                                "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i),
+                                python_call='python3')
             else:
                 t = python_args('-c',
-                    'import os',
-                    'import time',
-                    "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i))
+                                'import os',
+                                'import time',
+                                "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i),
+                                python_call='python3')
             tasks.append(t)
         p = sh.parallel(*tasks)
         p.wait()
@@ -167,6 +171,7 @@ def run_parallel():
         time.sleep(1)
 
         with sh.parallel() as p:
+            # python3 from shell
             for i in range(10):
                 if i == 3:
                     p.python('-c',
