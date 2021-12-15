@@ -35,7 +35,7 @@ if __name__ == "__main__":
     url = meta['url']
     author = meta['author']
     author_email = meta['author_email']
-    keywords = 'shell bash subprocess sh'
+    keywords = 'shell subprocess terminal bash sh remote'
     packages = find_packages(exclude=('tests', 'docs', 'bin'))
 
     # Extensions
@@ -77,6 +77,7 @@ if __name__ == "__main__":
 
           # options to install extra requirements
           install_requires=[
+              'serial_json>=1.0.0',
               ],
           extras_require={
               },
