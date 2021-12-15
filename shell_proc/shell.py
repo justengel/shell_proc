@@ -57,7 +57,12 @@ class ShellExit(Exception):
 
 class Command(object):
     """Command that was run with the results."""
-    def __init__(self, cmd='', exit_code=-1, stdout='', stderr=''):
+    DEFAULT_EXIT_CODE = -1
+
+    def __init__(self, cmd='', exit_code=None, stdout='', stderr=''):
+        if exit_code is None:
+            exit_code = self.DEFAULT_EXIT_CODE
+
         self.cmd = cmd
         self.exit_code = exit_code
         self.stdout = stdout
@@ -81,7 +86,19 @@ class Command(object):
 
     def is_finished(self):
         """Return if this command finished."""
-        return self.exit_code != -1
+        return self.exit_code != self.DEFAULT_EXIT_CODE
+
+    def as_dict(self):
+        """Return the results as a dictionary."""
+        return {'cmd': self.cmd, 'exit_code': self.exit_code, 'stdout': self.stdout, 'stderr': self.stderr}
+
+    def update(self, d):
+        try:
+            d = d.as_dict()
+        except:
+            pass
+        for k, v in d.items():
+            setattr(self, k, v)
 
     def __str__(self):
         return self.cmd
@@ -91,6 +108,21 @@ class Command(object):
 
     def __int__(self):
         return self.exit_code
+
+    def __getitem__(self, item):
+        value = getattr(self, item)
+        if value is None:
+            raise KeyError('Invalid key given!')
+        return value
+
+    def __setitem__(self, item, value):
+        setattr(self, item, value)
+
+    def __getstate__(self):
+        return self.as_dict()
+
+    def __setstate__(self, state):
+        self.update(state)
 
 
 class Shell(object):
