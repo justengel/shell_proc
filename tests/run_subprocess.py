@@ -1,5 +1,5 @@
 from subprocess import Popen, PIPE
-from shell_proc import Shell
+from shell_proc import Shell, ShellExit
 
 
 def run_subprocess():
@@ -28,10 +28,14 @@ def run_shell():
     with Shell(stdout=sys.stdout, stderr=sys.stderr) as sh:
         sh('cd ./storage')
         sh('exit()')
-        sh('dir')
+        try:
+            sh('dir')
+            raise AssertionError('Shell already closed!')
+        except (ShellExit):
+            pass  # Should hit here
 
 
 if __name__ == '__main__':
-    # run_subprocess()
+    run_subprocess()
     run_shell()
 

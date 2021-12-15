@@ -181,3 +181,73 @@ Below are several functions to read data from stdout and io.StringIO()
         if file is None:
             file = sys.stdout
         print(clear_io(fp), file=file, flush=True)
+
+Run Python
+==========
+
+Added support to call python in a subprocess
+
+.. code-block:: python
+
+    from shell_proc import Shell
+
+    with Shell() as sh:
+        sh.python('-c',
+                  'import os',
+                  'print("My PID:", os.getpid())')
+
+
+Run Parallel
+============
+
+Added support to run parallel subprocesses
+
+.. code-block:: python
+
+    import sys
+    import time
+    from shell_proc import Shell, python_args
+
+    with Shell(stdout=sys.stdout, stderr=sys.stderr) as sh:
+        p = sh.parallel(*(python_args('-c',
+                    'import os',
+                    'import time',
+                    "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i)) for i in range(10)))
+        sh.wait()  # or p.wait()
+        print('finished parallel')
+        time.sleep(1)
+
+        tasks = []
+        for i in range(10):
+            if i == 3:
+                t = python_args('-c',
+                    'import os',
+                    'import time',
+                    'time.sleep(1)',
+                    "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i))
+            else:
+                t = python_args('-c',
+                    'import os',
+                    'import time',
+                    "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i))
+            tasks.append(t)
+        p = sh.parallel(*tasks)
+        p.wait()
+        print('finished parallel')
+        time.sleep(1)
+
+        with sh.parallel() as p:
+            for i in range(10):
+                if i == 3:
+                    p.python('-c',
+                             'import os',
+                             'import time',
+                             'time.sleep(1)',
+                             "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i))
+                else:
+                    p.python('-c',
+                             'import os',
+                             'import time',
+                             "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i))
+            # p.wait() on exit context
+        print('finished parallel')

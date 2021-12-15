@@ -123,8 +123,70 @@ def run_manual():
     sh.close()
 
 
+def run_python():
+    import sys
+    from shell_proc import Shell
+
+    with Shell(stdout=sys.stdout, stderr=sys.stderr) as sh:
+        sh.python('-c',
+                  'import os',
+                  'print("My PID:", os.getpid())')
+
+
+def run_parallel():
+    import sys
+    import time
+    from shell_proc import Shell, python_args
+
+    with Shell(stdout=sys.stdout, stderr=sys.stderr) as sh:
+        p = sh.parallel(*(python_args('-c',
+                    'import os',
+                    'import time',
+                    "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i)) for i in range(10)))
+        sh.wait()  # or p.wait()
+        print('finished parallel')
+        time.sleep(1)
+
+        tasks = []
+        for i in range(10):
+            if i == 3:
+                t = python_args('-c',
+                    'import os',
+                    'import time',
+                    'time.sleep(1)',
+                    "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i))
+            else:
+                t = python_args('-c',
+                    'import os',
+                    'import time',
+                    "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i))
+            tasks.append(t)
+        p = sh.parallel(*tasks)
+        p.wait()
+        print('finished parallel')
+        time.sleep(1)
+
+        with sh.parallel() as p:
+            for i in range(10):
+                if i == 3:
+                    p.python('-c',
+                             'import os',
+                             'import time',
+                             'time.sleep(1)',
+                             "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i))
+                else:
+                    p.python('-c',
+                             'import os',
+                             'import time',
+                             "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i))
+            # p.wait() on exit context
+        print('finished parallel')
+
+
 if __name__ == '__main__':
-    # run_simple_result()
-    # run_context_manager()
-    # run_non_blocking()
+    run_simple_result()
+    run_context_manager()
+    run_non_blocking()
     run_manual()
+    run_python()
+    run_parallel()
