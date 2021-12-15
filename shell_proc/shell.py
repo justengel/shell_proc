@@ -228,13 +228,55 @@ class Command(object):
     def __setstate__(self, state):
         self.update(state)
 
-    def __or__(self, other):
-        if not isinstance(other, (str, shell_args)):
-            raise TypeError('Cannot PIPE type of {}'.format(type(other)))
+    def __or__(self, other_cmd):
+        if not isinstance(other_cmd, (str, shell_args)):
+            raise TypeError('Cannot PIPE type of {}'.format(type(other_cmd)))
         elif not self.has_output():
             raise RuntimeError('Command has no output to PIPE!')
 
-        return self.shell.pipe(self.stdout, other)
+        return self.shell.pipe(self.stdout, other_cmd)
+
+    def redirect(self, arg, stream='stdout', mode='w', **kwargs):
+        """Handle redirect >> or >. Cannot use 2> due to syntax error, but can > filename > &2.
+
+        Args:
+            arg (str/filename/pathlib.Path): Filename, None or 'nul' for where to write the stream
+            stream (str)['stdout']: Name of the stream to write.
+            mode (str)['w']: File mode.
+        """
+        file_handle = None
+        write = None
+
+        data = getattr(self, stream, None)
+        if isinstance(data, (bytes, bytearray)) and not mode.endswith('b'):
+            mode = mode + 'b'
+
+        if arg is None or arg == 'nul':
+            write = lambda *args, **kwargs: None
+        if arg == 'PRN' or arg == 'LPT1':
+            write = print
+        elif isinstance(arg, str) or hasattr(arg, '__fspath__'):
+            file_handle = open(arg, mode, newline='\n')
+            write = file_handle.write
+        else:
+            raise TypeError('Invalid filename given "{}"!'.format(arg))
+
+        try:
+            write(data)
+        finally:
+            try:
+                file_handle.close()
+            except (AttributeError, TypeError, Exception):
+                pass
+
+    def __gt__(self, filename):
+        self.redirect(filename, mode='w')
+        return self
+
+    def __rshift__(self, filename):
+        # Write stdout to file
+        self.redirect(filename, mode='a')
+        return self
 
 
 class Shell(object):
@@ -480,13 +522,13 @@ class Shell(object):
         arg = self.shell_args(*args, **kwargs)
 
         # Run the command
-        self._run(arg, pipe_text=pipe_text)
+        cmd = self._run(arg, pipe_text=pipe_text)
 
         # Check for completion
         if self.is_blocking():
             self.wait()
 
-        return self.last_command
+        return cmd
 
     def pipe(self, pipe_text, *args, **kwargs):
         """Run the given task and pipe the given text to it.
