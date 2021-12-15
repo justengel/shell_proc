@@ -5,6 +5,9 @@ import platform
 import time
 import threading
 import atexit
+import shlex
+import signal
+import psutil
 from subprocess import Popen, PIPE
 
 
@@ -48,6 +51,9 @@ class shell_args(object):
         super().__init__()
         self.args = [str(a) for a in args]
         self.kwargs = kwargs
+
+    def cmdline(self):
+        return shlex.split(str(self))
 
     @property
     def named_cli(self):
@@ -96,14 +102,72 @@ class Command(object):
     """Command that was run with the results."""
     DEFAULT_EXIT_CODE = -1
 
-    def __init__(self, cmd='', exit_code=None, stdout='', stderr=''):
+    def __init__(self, cmd='', exit_code=None, stdout='', stderr='', stdin='',
+                 shell=None, pid=None, pipe_timeout=None, **kwargs):
+        super().__init__()
         if exit_code is None:
             exit_code = self.DEFAULT_EXIT_CODE
+        if pipe_timeout is None:
+            pipe_timeout = 1
 
         self.cmd = cmd
         self.exit_code = exit_code
         self.stdout = stdout
         self.stderr = stderr
+        self.stdin = stdin  # Not really used. Maybe used with pipe?
+        self.shell = shell
+        self.pid = pid
+
+        self.pipe_timeout = pipe_timeout
+        self._last_pipe_data_time = 0
+        self._pipe_thread = None
+        self._end_pipe_thread = False
+
+    def cmdline(self):
+        try:
+            return self.cmd.cmdline()
+        except (AttributeError, Exception):
+            return shlex.split(str(self.cmd))
+
+    def pipe(self, pipe_text):
+        self.stdin = pipe_text
+        if not isinstance(pipe_text, bytes):
+            pipe_text = quote(str(pipe_text)).encode('utf-8')
+        self.shell.stdin.write(pipe_text)
+        self.shell.stdin.flush()
+        time.sleep(0.01)
+        self._last_pipe_data_time = time.time()
+
+        self._pipe_thread = threading.Thread(target=self.wait_for_pipe, daemon=True)
+        self._pipe_thread.start()
+
+    def wait_for_pipe(self):
+        time_dif = self.pipe_timeout - (time.time() - self._last_pipe_data_time)
+        while time_dif > 0 and not self._end_pipe_thread:
+            try:
+                time.sleep(time_dif)
+            except (TypeError, ValueError, Exception):
+                time.sleep(0.01)
+            time_dif = self.pipe_timeout - (time.time() - self._last_pipe_data_time)
+
+        self.kill()
+
+    def check_end_pipe_thread(self):
+        if self._end_pipe_thread:
+            try:
+                self._pipe_thread.join(0)
+            except (AttributeError, TypeError, Exception):
+                pass
+            self._pipe_thread = None
+            self._end_pipe_thread = False
+
+    def kill(self):
+        """Kill so the process stops waiting for stdin or pipe data."""
+        self._end_pipe_thread = True
+        os.kill(self.pid, signal.SIGINT)  # Stop the input
+
+        if self.shell is not None:
+            self.shell.echo_last_results()
 
     def add_pipe_data(self, pipe_name, data):
         """Add output data to the proper file/pipe handler."""
@@ -111,6 +175,8 @@ class Command(object):
             pipe_name = 'std' + pipe_name
         if isinstance(data, bytes):
             data = data.decode('utf-8', 'replace')
+
+        self._last_pipe_data_time = time.time()
         setattr(self, pipe_name, getattr(self, pipe_name, '') + data)
 
     def has_output(self):
@@ -123,6 +189,7 @@ class Command(object):
 
     def is_finished(self):
         """Return if this command finished."""
+        self.check_end_pipe_thread()
         return self.exit_code != self.DEFAULT_EXIT_CODE
 
     def as_dict(self):
@@ -161,6 +228,14 @@ class Command(object):
     def __setstate__(self, state):
         self.update(state)
 
+    def __or__(self, other):
+        if not isinstance(other, (str, shell_args)):
+            raise TypeError('Cannot PIPE type of {}'.format(type(other)))
+        elif not self.has_output():
+            raise RuntimeError('Command has no output to PIPE!')
+
+        return self.shell.pipe(self.stdout, other)
+
 
 class Shell(object):
     """Continuous Shell process to run a series of commands."""
@@ -171,6 +246,7 @@ class Shell(object):
     write_buffer = staticmethod(write_buffer)
 
     NEWLINE = os.linesep
+    NEWLINE_BYTES = NEWLINE.encode('utf-8')
 
     def __init__(self, *tasks, stdout=None, stderr=None, shell=False,
                  blocking=True, wait_on_exit=True, close_on_exit=True, **kwargs):
@@ -190,9 +266,11 @@ class Shell(object):
         self.stderr = None
         self.shell = shell
         self.proc = None
+        self.process = None
         self._blocking = blocking
         self.wait_on_exit = wait_on_exit
         self.close_on_exit = close_on_exit
+        self.pipe_timeout = 1  # seconds
 
         self._parallel_shell = []  # Keep parallel shells to close when we close
         self.history = []
@@ -213,6 +291,13 @@ class Shell(object):
         # Run the given tasks
         for task in tasks:
             self.run(task)
+
+    @property
+    def stdin(self):
+        try:
+            return self.proc.stdin
+        except (AttributeError, Exception):
+            return None
 
     def get_file(self, pipe_name):
         """Return the file for the given pipe_name (self.stdout or self.stderr)."""
@@ -280,32 +365,59 @@ class Shell(object):
     end_command = property(get_end_command, set_end_command)
     end_command_bytes = property(get_end_command_bytes, set_end_command)
 
-    def get_echo_end_command(self):
-        """Return the echo end command used to determine when the command finshed."""
+    def echo_last_results(self):
+        """Send a command to echo the results of the last command."""
         if self.is_windows():
-            return b'echo ' + self.end_command_bytes + b' %errorlevel%'
+            cmd = 'echo {end_cmd} {report}{nl}'.format(end_cmd=self.end_command, report='%errorlevel%', nl=self.NEWLINE)
         else:
-            return b'echo "' + self.end_command_bytes + b' $?"'
+            cmd = 'echo "{end_cmd} {report}"{nl}'.format(end_cmd=self.end_command, report='$?', nl=self.NEWLINE)
+        self.proc.stdin.write(cmd.encode('utf-8'))
+        self.proc.stdin.flush()
 
-    def _run(self, text_cmd):
+    def _run(self, shell_cmd, pipe_text='', pipe_timeout=None, **kwargs):
         """Run the given text command."""
         # Write input to run command
-        cmd = Command(text_cmd)
+        cmd = Command(shell_cmd, stdin=pipe_text, shell=self, pipe_timeout=pipe_timeout, **kwargs)
         self.history.append(cmd)
 
-        # Run the command and the echo command to get the results
-        self.proc.stdin.write(bytes(cmd) + self.NEWLINE.encode('utf-8'))
-        if self.end_command:
-            self.proc.stdin.write(self.get_echo_end_command() + self.NEWLINE.encode('utf-8'))
+        # Get the child to see if there are new children
+        cmdline = cmd.cmdline()
+        ppid = self.proc.pid
+        pids = psutil.pids()  # children = [c.pid for c in self.process.children()]
+
+        # Run the command
+        self.proc.stdin.write(bytes(cmd) + self.NEWLINE_BYTES)
         self.proc.stdin.flush()
+
+        # Find the pid
+        for pid in psutil.pids():
+            if pid not in pids:
+                p = psutil.Process(pid)
+                if p.ppid() == ppid and p.cmdline() == cmdline:
+                    cmd.pid = p.pid
+                    break
+
+        # Pipe text into the previous command
+        if pipe_text:
+            # Pipe will continuously wait for input.
+            # Command.pipe will run a thread to wait for stdout/stderr timeout and
+            # echo_last_results to signal that it is finished
+            cmd.pipe(pipe_text)
+        else:
+            # Tell the shell to echo the last results this lets us know when the previous command finishes
+            try:
+                self.echo_last_results()
+            except (OSError, Exception):
+                pass  # Given command closed the shell
 
         return cmd
 
-    def run(self, *args, **kwargs):
+    def run(self, *args, pipe_text='', **kwargs):
         """Run the given task.
 
         Args:
             *args (tuple/object): Arguments to combine into a runnable string.
+            pipe_text (str)['']: Text to pipe into the task
             **kwargs (dict/object): Keyword arguments to combine into a runnable string with "--key value".
 
         Returns:
@@ -318,17 +430,31 @@ class Shell(object):
         elif not self.is_proc_running():
             raise ShellExit('The internal shell process was closed and is no longer running!')
 
-        # Convert the argument to text to run
+        # Format the arguments
         arg = self.shell_args(*args, **kwargs)
 
         # Run the command
-        self._run(arg)
+        self._run(arg, pipe_text=pipe_text)
 
         # Check for completion
         if self.is_blocking():
             self.wait()
 
         return self.last_command
+
+    def pipe(self, pipe_text, *args, **kwargs):
+        """Run the given task and pipe the given text to it.
+
+        Args:
+            pipe_text (str): Text to pipe into the task
+            *args (tuple/object): Arguments to combine into a runnable string.
+            **kwargs (dict/object): Keyword arguments to combine into a runnable string with "--key value".
+
+        Returns:
+            success (bool)[True]: If True the call did not print any output to stderr.
+                If False there was some output printed to stderr.
+        """
+        return self.run(*args, pipe_text=pipe_text, **kwargs)
 
     def python(self, *args, venv=None, windows=None, **kwargs):
         """Run the given lines as a python script.
@@ -348,8 +474,8 @@ class Shell(object):
         elif not self.is_proc_running():
             raise ShellExit('The internal shell process was closed and is no longer running!')
 
-        # Convert the argument to text to run
-        arg = self.python_args(*args, **kwargs)
+        # Format the arguments
+        arg = self.python_args(*args, venv=venv, windows=windows, **kwargs)
 
         # Run the command
         self._run(arg)
@@ -466,6 +592,7 @@ class Shell(object):
 
     def is_finished(self, *additional, check_parallel=True, **kwargs):
         """Return if all of the shell commands have finished"""
+        # check if finished count is less than commands
         if len(self.history) > self._finished_count:
             return False
 
@@ -495,6 +622,7 @@ class Shell(object):
             self.proc = Popen('/bin/bash', stdin=PIPE, stdout=PIPE, stderr=PIPE, shell=self.shell)
 
         # Command count
+        self.process = psutil.Process(self.proc.pid)
         self.history = []
         self._finished_count = 0
 
@@ -538,6 +666,7 @@ class Shell(object):
         self._th_out = None
         self._th_err = None
         self.proc = None
+        self.process = None
         return self
 
     def close(self):
@@ -626,6 +755,7 @@ class ParallelShell(list):
     write_buffer = staticmethod(write_buffer)
 
     NEWLINE = os.linesep
+    NEWLINE_BYTES = NEWLINE.encode('utf-8')
 
     def __init__(self, *tasks, stdout=None, stderr=None, wait_on_exit=True, close_on_exit=True, **kwargs):
         super().__init__()

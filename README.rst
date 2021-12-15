@@ -251,3 +251,23 @@ Added support to run parallel subprocesses
                              "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i))
             # p.wait() on exit context
         print('finished parallel')
+
+
+Use Pipe
+========
+
+The pipe operator can be used with Command objects to take a completed command stdout and submit the text into a
+new commands stdin.
+
+.. code-block:: python
+
+    import sys
+    from shell_proc import Shell, ShellExit, shell_args
+
+    with Shell(stdout=sys.stdout, stderr=sys.stderr) as sh:
+        # One step
+        results = sh('dir') | 'find "run"'  # Hard to tell where find output starts
+
+        # Two Steps
+        cmd = sh('dir')
+        results = cmd | 'find "run"'
