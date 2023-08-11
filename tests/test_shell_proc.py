@@ -96,7 +96,19 @@ def test_has_out():
     print('========== End Shell ==========')
 
 
+def test_block():
+    import io
+    import time
+    from shell_proc import Shell
+
+    with Shell(stdout=io.StringIO()) as sh:
+        start = time.time()
+        sh('ls', block=1)
+        assert (time.time() - start) >= 1, "Did not block the given timeout"
+
+
 if __name__ == '__main__':
     test_simple()
     test_has_err()
     test_has_out()
+    test_block()

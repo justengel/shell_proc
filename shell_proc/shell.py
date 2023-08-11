@@ -298,7 +298,7 @@ class Shell(object):
             *tasks (tuple/str/object): List of string commands to run.
             stdout (io.TextIOWrapper/object)[None]: Standard out to redirect the separate process standard out to.
             stderr (io.TextIOWrapper/object)[None]: Standard error to redirect the separate process standard out to.
-            blocking (bool)[True]: If False write to stdin without waiting for the previous command to finish.
+            blocking (bool/float)[True]: If False write to stdin without waiting for the previous command to finish.
             wait_on_exit (bool)[True]: If True on context manager exit wait for all commands to finish.
             close_on_exit (bool)[True]: If True close the process when the context manager exits. This may be useful
                 to be false for running multiple processes. Method "wait" can always be called to wait for all commands.
@@ -500,12 +500,13 @@ class Shell(object):
         else:
             return self._run_linux(shell_cmd, pipe_text=pipe_text, **kwargs)
 
-    def run(self, *args, pipe_text='', **kwargs):
+    def run(self, *args, pipe_text='', block=None, **kwargs):
         """Run the given task.
 
         Args:
             *args (tuple/object): Arguments to combine into a runnable string.
             pipe_text (str)['']: Text to pipe into the task
+            block (float/bool)[None]: If None use Shell setting else sleep the number of seconds given.
             **kwargs (dict/object): Keyword arguments to combine into a runnable string with "--key value".
 
         Returns:
@@ -525,16 +526,21 @@ class Shell(object):
         cmd = self._run(arg, pipe_text=pipe_text)
 
         # Check for completion
-        if self.is_blocking():
+        if block is None:
+            block = self.is_blocking()
+        if block is True:
             self.wait()
+        else:
+            time.sleep(block or 0)
 
         return cmd
 
-    def pipe(self, pipe_text, *args, **kwargs):
+    def pipe(self, pipe_text, *args, block=None, **kwargs):
         """Run the given task and pipe the given text to it.
 
         Args:
             pipe_text (str): Text to pipe into the task
+            block (float/bool)[None]: If None use Shell setting else sleep the number of seconds given.
             *args (tuple/object): Arguments to combine into a runnable string.
             **kwargs (dict/object): Keyword arguments to combine into a runnable string with "--key value".
 
@@ -542,7 +548,7 @@ class Shell(object):
             success (bool)[True]: If True the call did not print any output to stderr.
                 If False there was some output printed to stderr.
         """
-        return self.run(*args, pipe_text=pipe_text, **kwargs)
+        return self.run(*args, pipe_text=pipe_text, block=block, **kwargs)
 
     def python(self, *args, venv=None, windows=None, python_call=None, **kwargs):
         """Run the given lines as a python script.
@@ -799,11 +805,13 @@ class Shell(object):
         except:
             pass
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args, pipe_text='', block=None, **kwargs):
         """Run the given task.
 
         Args:
             *args (tuple/object): Arguments to combine into a runnable string.
+            pipe_text (str)['']: Text to pipe into the task
+            block (float/bool)[None]: If None use Shell setting else sleep the number of seconds given.
             **kwargs (dict/object): Keyword arguments to combine into a runnable string with "--key value".
 
         Returns:
@@ -811,7 +819,7 @@ class Shell(object):
                 If False there was some output printed to stderr.
         """
         try:
-            return self.run(*args, **kwargs)
+            return self.run(*args, pipe_text=pipe_text, block=block, **kwargs)
         except ShellExit as err:
             # "from None" changes traceback to here without chaining
             raise ShellExit(str(err)) from None
@@ -867,7 +875,7 @@ class ParallelShell(list):
             else:
                 self.run(task, **kwargs)
 
-    def run(self, *args, stdout=None, stderr=None, wait_on_exit=None, close_on_exit=None, **kwargs):
+    def run(self, *args, stdout=None, stderr=None, wait_on_exit=None, close_on_exit=None, pipe_text='', block=None, **kwargs):
         if stdout is None:
             stdout = self.stdout
         if stderr is None:
@@ -880,12 +888,12 @@ class ParallelShell(list):
         sh = Shell(blocking=False, stdout=stdout, stderr=stderr, wait_on_exit=wait_on_exit, close_on_exit=close_on_exit,
                    python_call=self.python_call)
         self.append(sh)
-        sh.run(*args, **kwargs)
+        sh.run(*args, pipe_text=pipe_text, block=block, **kwargs)
 
         return sh
 
     def python(self, *args, venv=None, windows=None, python=None, stdout=None, stderr=None,
-               wait_on_exit=None, close_on_exit=None, **kwargs):
+               wait_on_exit=None, close_on_exit=None, pipe_text='', block=None, **kwargs):
         """Run the given lines as a python script.
 
         Args:
@@ -898,6 +906,8 @@ class ParallelShell(list):
             wait_on_exit (bool)[True]: If True on context manager exit wait for all commands to finish.
             close_on_exit (bool)[True]: If True close the process when the context manager exits. This may be useful
                 to be false for running multiple processes. Method "wait" can always be called to wait for all commands.
+            pipe_text (str)['']: Text to pipe into the task
+            block (float/bool)[None]: If None use Shell setting else sleep the number of seconds given.
             **kwargs (dict/object): Additional keyword arguments.
 
         Returns:
@@ -915,7 +925,7 @@ class ParallelShell(list):
         sh = Shell(blocking=False, stdout=stdout, stderr=stderr, wait_on_exit=wait_on_exit, close_on_exit=close_on_exit,
                    python_call=self.python_call)
         self.append(sh)
-        sh.python(*args, venv=venv, windows=windows, python=python, **kwargs)
+        sh.python(*args, venv=venv, windows=windows, python=python, pipe_text=pipe_text, block=block, **kwargs)
 
         return sh
 
@@ -959,11 +969,13 @@ class ParallelShell(list):
         except:
             pass
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args, pipe_text='', block=None, **kwargs):
         """Run the given task.
 
         Args:
             *args (tuple/object): Arguments to combine into a runnable string.
+            pipe_text (str)['']: Text to pipe into the task
+            block (float/bool)[None]: If None use Shell setting else sleep the number of seconds given.
             **kwargs (dict/object): Keyword arguments to combine into a runnable string with "--key value".
 
         Returns:
@@ -971,7 +983,7 @@ class ParallelShell(list):
                 If False there was some output printed to stderr.
         """
         try:
-            return self.run(*args, **kwargs)
+            return self.run(*args, pipe_text=pipe_text, block=block, **kwargs)
         except ShellExit as err:
             # "from None" changes traceback to here without chaining
             raise ShellExit(str(err)) from None
