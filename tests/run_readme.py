@@ -25,7 +25,7 @@ def run_context_manager():
 
         if sh.is_windows():
             sh('python -m venv ./winvenv')
-            sh('call ./winvenv/Scripts/activate.bat')
+            sh('./winvenv/Scripts/activate.bat')
         else:
             pwd = sh('pwd')
             sh('cd ~')
@@ -57,7 +57,7 @@ def run_non_blocking():
 
         if sh.is_windows():
             sh('python -m venv ./winvenv')
-            sh('call ./winvenv/Scripts/activate.bat')
+            sh('./winvenv/Scripts/activate.bat')
         else:
             pwd = sh('pwd')
             sh('cd ~')
@@ -91,7 +91,7 @@ def run_manual():
     # Manually run tasks
     if sh.is_windows():
         sh('python -m venv ./winvenv')
-        sh('call ./winvenv/Scripts/activate.bat')
+        sh('./winvenv/Scripts/activate.bat')
     else:
         pwd = sh('pwd')
         sh('cd ~')
@@ -188,6 +188,39 @@ def run_parallel():
         print('finished parallel')
 
 
+def run_input():
+    """Test reading prompts.
+
+    I noticed that prompts do not show up in the output and freeze the shell. This is due to how python
+    reads pipes. Python typically reads pipes by lines. Prompting the user for input usually does not end
+    in a new line.
+
+    I've updated the reading code to be non-blocking to solve this issue.
+    """
+    import sys
+    from shell_proc import Shell
+
+    with Shell(stdout=sys.stdout, stderr=sys.stderr) as sh:
+        print("Give user input when prompted")
+        # Need block=False or will wait forever for input it cannot receive
+        sh("python prompt_me.py", block=False)
+
+        # Get actual input from user
+        value = input()
+
+        # Send input to stdin (without expecting this to run as a command)
+        # This will finish the first command sh(python prompt_me.py)
+        sh.input(value)
+        sh.wait()  # Manually wait for sh(python prompt_me.py) to finish
+
+        # Test again
+        sh("python prompt_me.py", block=False)
+        sh.input("John Doe")
+
+    # Shell.__exit__ will wait for final exit_code from sh(python prompt_me.py)
+    print("Exited successfully!")
+
+
 if __name__ == '__main__':
     run_simple_result()
     run_context_manager()
@@ -195,3 +228,4 @@ if __name__ == '__main__':
     run_manual()
     run_python()
     run_parallel()
+    run_input()

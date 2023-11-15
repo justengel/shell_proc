@@ -10,6 +10,25 @@ Install
     pip install shell_proc
 
 
+2.0.0 Changes
+-------------
+
+This library has recently been updated to support commands with stdin prompts.
+I noticed `git` and `ssh` would occasionally request pompt input from the user for authorization.
+The old approach would get the exit code by sending an echo to stdin.
+This would give the echo command as a user prompt.
+To support this a lot of things had to change.
+Windows users will notice some changes.
+
+* I changed how the echo results works and am using `";"` instead of a second command passed into stdin.
+* I also changed the pipes to non-blocking allowing input prompts to be read.
+    * Before the pipe reading waited on a newline.
+* Unfortunately, ";" did not really work with windows cmd.
+    * Windows operations were changed to use powershell.
+    * Powershell `$?` gives `"True"` or `"False"`, so it does not give a proper exit_code.
+    * Old cmd is still supported if you pass `use_old_cmd=True` into the Shell. Not guaranteed to work.
+* Added `input` which will only pass values into stdin without expecting a command to finish.
+
 Run
 ===
 
@@ -44,7 +63,7 @@ Run a series of terminal commands.
 
         if sh.is_windows():
             sh('python -m venv ./winvenv')
-            sh('call ./winvenv/Scripts/activate.bat')
+            sh('./winvenv/Scripts/activate.bat')
         else:
             pwd = sh('pwd')
             sh('cd ~')
@@ -78,7 +97,7 @@ Run without blocking every command
 
         if sh.is_windows():
             sh('python -m venv ./winvenv')
-            sh('call ./winvenv/Scripts/activate.bat')
+            sh('./winvenv/Scripts/activate.bat')
         else:
             pwd = sh('pwd')
             sh('cd ~')
@@ -116,7 +135,7 @@ Manually call commands and check results.
     # Manually run tasks
     if sh.is_windows():
         sh('python -m venv ./winvenv')
-        sh('call ./winvenv/Scripts/activate.bat')
+        sh('./winvenv/Scripts/activate.bat')
     else:
         pwd = sh('pwd')
         sh('cd ~')
@@ -271,3 +290,62 @@ new commands stdin.
         # Two Steps
         cmd = sh('dir')
         results = cmd | 'find "run"'
+
+
+Input Prompts
+=============
+
+As of version 2.0.0, Shell can work with input prompts.
+I noticed `git` and `ssh` would occasionally request pompt input from the user for authorization.
+I wanted to support this use case.
+
+Input prompt code
+
+.. code-block:: python
+
+    # prompt_me.py
+    print("Greetings!")
+    name = input("Hello, who am I talking to? ")
+    print(f"It\'s nice to meet you {name!r}")
+
+
+Shell code
+
+.. code-block:: python
+
+    # run shell
+    import sys
+    from shell_proc import Shell
+
+    with Shell(stdout=sys.stdout, stderr=sys.stderr) as sh:
+        print("Give user input when prompted")
+        # Need block=False or will wait forever for input it cannot receive
+        sh("python prompt_me.py", block=False)
+
+        # Get actual input from user
+        value = input()
+
+        # Send input to stdin (without expecting this to run as a command)
+        # This will finish the first command sh(python prompt_me.py)
+        sh.input(value)
+        sh.wait()  # Manually wait for sh(python prompt_me.py) to finish
+
+        # Test again
+        sh("python prompt_me.py", block=False)
+        sh.input("John Doe")
+
+    # Shell.__exit__ will wait for final exit_code from sh(python prompt_me.py)
+    print("Exited successfully!")
+
+
+Output. Note, "Jane Doe" was entered in as input.
+
+.. code-block:: text
+
+    Give user input when prompted
+    Greetings!
+    Hello, who am I talking to? Jane Doe
+    It's nice to meet you 'Jane Doe'
+    Greetings!
+    Hello, who am I talking to? It's nice to meet you 'John Doe'
+    Exited successfully!

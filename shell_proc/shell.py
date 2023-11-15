@@ -7,21 +7,13 @@ import threading
 import atexit
 import shlex
 import signal
+from functools import partial
 from subprocess import Popen, PIPE
+from .non_blocking_pipe import is_windows, is_linux, set_non_blocking
 
 
 __all__ = ['is_windows', 'is_linux', 'write_buffer', 'quote', 'shell_args', 'python_args',
            'ShellExit', 'Command', 'Shell', 'ParallelShell']
-
-
-def is_windows():
-    """Return if this platform is windows."""
-    return platform.system() == 'Windows'
-
-
-def is_linux():
-    """Return if this platform is linux."""
-    return not is_windows()
 
 
 def write_buffer(fp, bts):
@@ -171,7 +163,7 @@ class Command(object):
         """Add output data to the proper file/pipe handler."""
         if not pipe_name.startswith('std'):
             pipe_name = 'std' + pipe_name
-        if isinstance(data, bytes):
+        if isinstance(data, (bytes, bytearray)):
             data = data.decode('utf-8', 'replace')
 
         self._last_pipe_data_time = time.time()
@@ -291,7 +283,8 @@ class Shell(object):
     NEWLINE_BYTES = NEWLINE.encode('utf-8')
 
     def __init__(self, *tasks, stdout=None, stderr=None, shell=False,
-                 blocking=True, wait_on_exit=True, close_on_exit=True, python_call=None, **kwargs):
+                 blocking=True, wait_on_exit=True, close_on_exit=True, python_call=None,
+                 use_old_cmd: bool = False, **kwargs):
         """Initialize the Shell object.
 
         Args:
@@ -302,6 +295,8 @@ class Shell(object):
             wait_on_exit (bool)[True]: If True on context manager exit wait for all commands to finish.
             close_on_exit (bool)[True]: If True close the process when the context manager exits. This may be useful
                 to be false for running multiple processes. Method "wait" can always be called to wait for all commands.
+            python_call (str)[None]: Python executable to use. Can be a full path or "python3". Default is "python".
+            use_cmd (bool)[False]: If True on windows use cmd otherwise use powershell. Old cmd may not work with $?.
         """
         if self.is_windows():
             self._run = self._run_windows
@@ -313,11 +308,11 @@ class Shell(object):
         self.stderr = None
         self.shell = shell
         self.proc = None
-        self.process = None
         self._blocking = blocking
         self.wait_on_exit = wait_on_exit
         self.close_on_exit = close_on_exit
         self.python_call = python_call
+        self.use_old_cmd = use_old_cmd
 
         self._parallel_shell = []  # Keep parallel shells to close when we close
         self.history = []
@@ -325,9 +320,10 @@ class Shell(object):
         self._end_command = '=========== SHELL END COMMAND =========='
         self._end_command_bytes = self._end_command.encode('utf-8')
 
-        # Private Variabless
+        # Private Variables
         self._th_out = None
         self._th_err = None
+        self._buffers = {"out": bytearray(), "err": bytearray()}
 
         # Check the given stdout and stderr values
         if stdout is not None:
@@ -402,7 +398,7 @@ class Shell(object):
 
     def set_end_command(self, value):
         """Set the end command string."""
-        if isinstance(value, bytes):
+        if isinstance(value, (bytes, bytearray)):
             self._end_command_bytes = value
             self._end_command = self._end_command_bytes.decode('utf-8', 'replace')
         else:
@@ -412,14 +408,12 @@ class Shell(object):
     end_command = property(get_end_command, set_end_command)
     end_command_bytes = property(get_end_command_bytes, set_end_command)
 
-    def echo_last_results(self):
-        """Send a command to echo the results of the last command."""
-        if self.is_windows():
-            cmd = 'echo {end_cmd} {report}{nl}'.format(end_cmd=self.end_command, report='%errorlevel%', nl=self.NEWLINE)
+    def get_echo_results(self):
+        if self.is_windows() and self.use_old_cmd:
+            cmd = 'echo "{end_cmd} {report}"'.format(end_cmd=self.end_command, report='%errorlevel%')
         else:
-            cmd = 'echo {end_cmd} {report}{nl}'.format(end_cmd=self.end_command, report='$?', nl=self.NEWLINE)
-        self.proc.stdin.write(cmd.encode('utf-8'))
-        self.proc.stdin.flush()
+            cmd = 'echo "{end_cmd} {report}"'.format(end_cmd=self.end_command, report='$?')
+        return cmd.encode()
 
     def _run_linux(self, shell_cmd, pipe_text='', **kwargs):
         """Run the given text command."""
@@ -429,19 +423,14 @@ class Shell(object):
 
         # Check for pipe
         if pipe_text:
-            if not isinstance(pipe_text, bytes):
+            if not isinstance(pipe_text, (bytes, bytearray)):
                 pipe_text = quote(str(pipe_text)).encode('utf-8')  # Key is quote
             self.proc.stdin.write(b'echo ' + pipe_text + b' | ')
 
         # Run the command
-        self.proc.stdin.write(bytes(cmd) + self.NEWLINE_BYTES)
+        echo = self.get_echo_results()
+        self.proc.stdin.write(bytes(cmd) + b" ; " + echo + self.NEWLINE_BYTES)
         self.proc.stdin.flush()
-
-        # Tell the shell to echo the last results this lets us know when the previous command finishes
-        try:
-            self.echo_last_results()
-        except (OSError, Exception):
-            pass  # Given command closed the shell
 
         return cmd
 
@@ -452,7 +441,13 @@ class Shell(object):
         self.history.append(cmd)
 
         # Run the command
-        self.proc.stdin.write(bytes(cmd) + self.NEWLINE_BYTES)
+        echo = self.get_echo_results()
+        if not self.use_old_cmd:
+            self.proc.stdin.write(bytes(cmd) + b" ; " + echo + self.NEWLINE_BYTES)
+        else:
+            # Old cmd prompt has problems and doesn't respect ";"
+            # echo results is called below. This ruins prompts.
+            self.proc.stdin.write(bytes(cmd) + self.NEWLINE_BYTES)
         self.proc.stdin.flush()
         time.sleep(0.00001)
 
@@ -464,7 +459,7 @@ class Shell(object):
                 raise RuntimeError('Could not find the process id to pipe data into!')
 
             # Send the pipe_text into stdin
-            if not isinstance(pipe_text, bytes):
+            if not isinstance(pipe_text, (bytes, bytearray)):
                 pipe_text = str(pipe_text).encode('utf-8')  # Key is quote
             self.proc.stdin.write(pipe_text + self.NEWLINE_BYTES)
             self.proc.stdin.flush()
@@ -486,10 +481,14 @@ class Shell(object):
             # self.proc.stdin.flush()
 
         # Tell the shell to echo the last results this lets us know when the previous command finishes
-        try:
-            self.echo_last_results()
-        except (OSError, Exception):
-            pass  # Given command closed the shell
+        if self.use_old_cmd:
+            # Old cmd prompt has problems and doesn't respect ";"
+            # This will send the echo results to stdin which will ruin prompts
+            try:
+                self.proc.stdin.write(echo + self.NEWLINE_BYTES)
+                self.proc.stdin.flush()
+            except (OSError, Exception):
+                pass  # Given command closed the shell
 
         return cmd
 
@@ -534,6 +533,15 @@ class Shell(object):
             time.sleep(block or 0)
 
         return cmd
+
+    def input(self, value):
+        """Input text into the process' stdin. Do not expect this to be a command and do not wait to finish."""
+        if isinstance(value, str):
+            value = value.encode()
+        if not value.strip(b" ").endswith(b"\n"):
+            value = value + self.NEWLINE_BYTES
+        self.proc.stdin.write(value)
+        self.proc.stdin.flush()
 
     def pipe(self, pipe_text, *args, block=None, **kwargs):
         """Run the given task and pipe the given text to it.
@@ -583,88 +591,114 @@ class Shell(object):
         return self.last_command
 
     @staticmethod
-    def read_pipe(pipe, callback=None):
+    def read_pipe(pipe, callback, timeout: float = 0.5):
         """Continuously read the given pipe.
 
         Args:
-            pipe (io.TextIOOWrapper): File object/buffer from the subprocess to read from and redirect.
-            callback (function/callable)[None]: Function that handles the data read from the pipe.
+            pipe (io.TextIOOWrapper): File object/buffer from the subprocess to read from and redirect with.
+            callback (function/callable): Function that handles the data read from the pipe.
+            timeout (float)[2]: Select timeout
         """
-        if not callable(callback):
-            callback = lambda msg: None
+        # Change pipe to non-blocking. Popen requires bufsize=0
+        set_non_blocking(pipe)
+        buffer = io.BufferedReader(pipe)
 
+        last_read_data = 0
         while True:
             try:
-                # Read the incoming lines from the PIPE
-                for msg in pipe:
-                    try:
-                        callback(msg)
-                    except (ValueError, TypeError, Exception):
-                        pass
-            except (BrokenPipeError, Exception):
+                # Read all data from the buffer 1 time non-blocking
+                try:
+                    data = buffer.read1()
+                except (BlockingIOError, OSError):  # Windows non-blocking can cause OSError
+                    data = b''
+                has_data = len(data) > 0
+                if has_data:
+                    last_read_data = time.time()
+                    callback(data)
+                elif (time.time() - last_read_data) > timeout:
+                    # Timeout to try processing what is left in buffer
+                    last_read_data = time.time()
+                    callback(b'')
+                else:
+                    time.sleep(0.1)
+            except BrokenPipeError:
                 break
 
-    def check_output(self, msg):
-        """Check the output message.
-
-        Returns:
-            msg (bytes): Output message to parse.
-        """
-        # ===== Check the finished flag =====
-        end_cmd = self.end_command_bytes
-        if end_cmd and end_cmd in msg:  # Ignore all "echo END_COMMAND"
-            try:
-                idx = msg.index(end_cmd)
-                exit_code = int(msg[idx+len(end_cmd):].strip().decode('utf-8'))  # If no exit code it is an echo of cmd
-                self.history[self._finished_count].exit_code = exit_code
-                self._finished_count += 1
-            except:
-                pass
-            return False
-
-        # ===== Check the has_print flag =====
-        has_msg = msg.strip()
+    def _parse_output(self, line):
+        """Parse the end command echo results."""
+        # Skip parsing the current command
         try:
-            is_not_cmd = not has_msg.endswith(bytes(self.current_command))
-        except (AttributeError, TypeError, ValueError, Exception):
-            is_not_cmd = False
-
-        # Check if there is output and that the output is not from the stdin running the command (Windows).
-        if not self.is_finished() and has_msg and is_not_cmd:
-            try:
-                self.history[self._finished_count].add_pipe_data('out', msg)
-            except:
-                pass
-            try:
-                self.write_buffer(self.stdout, msg)
-            except:
-                pass
-
-    def check_error(self, msg):
-        """Check the error message.
-
-        Returns:
-            msg (bytes): Error message to parse.
-        """
-        # ===== Check the finished flag ERROR =====
-        end_cmd = self.end_command_bytes
-        if end_cmd and end_cmd in msg:
-            # Error Occurred during the "echo END_COMMAND" (like interactive python tries echo as python code)
-            try:
-                self.history[self._finished_count].exit_code = 1
-                self._finished_count += 1
-            except:
-                pass
-            # return False
-
-        try:
-            self.history[self._finished_count].add_pipe_data('err', msg)
-        except:
+            cmd = bytes(self.current_command)
+            cmd_echo = cmd + b" ; " + self.get_echo_results()
+            if line.strip().endswith(cmd) or line.strip().endswith(cmd_echo):
+                return b'', None
+        except (AttributeError, TypeError, Exception):
             pass
-        try:
-            self.write_buffer(self.stderr, msg)
-        except:
-            pass
+
+        # Check the finished flag
+        exit_code = None
+        end_cmd = self.end_command_bytes
+        if end_cmd and end_cmd in line:
+            try:
+                idx = line.index(end_cmd)
+                end_idx = line[idx+1:].index(self.NEWLINE_BYTES)
+
+                output = line[idx+len(end_cmd): idx+1+end_idx]
+                line = b''
+
+                # If no exit code it is an echo of cmd
+                status = output.strip().decode('utf-8')
+                try:
+                    exit_code = int(status)
+                except (TypeError, AttributeError, Exception):
+                    # Windows Powershell 🤦
+                    if status == "True":
+                        exit_code = 0
+                    elif status == "False":
+                        exit_code = 1
+            except (IndexError, TypeError, AttributeError, Exception):
+                pass
+
+        return line, exit_code
+
+    def check_pipe(self, msg, pipe_name):
+        """Check the output of a message."""
+        buffer = self._buffers[pipe_name]
+        if msg:
+            buffer.extend(msg)
+            lines = buffer.split(self.NEWLINE_BYTES)
+            self._buffers[pipe_name] = lines[-1]
+            lines = [l + self.NEWLINE_BYTES for l in lines[:-1]]
+        elif buffer:
+            # Timeout occurred process all output
+            lines, self._buffers[pipe_name] = [buffer], buffer[0:0]
+        else:
+            # No data to process
+            return
+
+        # Iterate through lines
+        stdfile = getattr(self, "std"+pipe_name)
+        last_line_parsed = False
+        for line in lines:
+            # Skip blank lines from command echo
+            if last_line_parsed and not line.strip():
+                continue
+
+            # ===== Check the finished flag =====
+            parsed, exit_code = self._parse_output(line)
+            last_line_parsed = line != parsed
+            if parsed:
+                try:
+                    self.history[self._finished_count].add_pipe_data(pipe_name, parsed)
+                    self.write_buffer(stdfile, parsed)
+                except (IndexError, KeyError, TypeError, ValueError, Exception):
+                    pass
+            if exit_code is not None:
+                try:
+                    self.history[self._finished_count].exit_code = exit_code
+                    self._finished_count += 1
+                except (IndexError, KeyError, TypeError, ValueError, Exception):
+                    pass
 
     def is_running(self, *additional, check_parallel=True, **kwargs):
         """Return if the continuous shell process is running."""
@@ -711,29 +745,39 @@ class Shell(object):
 
         # Create the continuous terminal process
         if self.is_windows():
-            # /K run command and remain (disables the banner)
-            self.proc = Popen('cmd.exe /K', stdin=PIPE, stdout=PIPE, stderr=PIPE, shell=self.shell)
-            self.proc.stdin.write(b'setlocal enabledelayedexpansion' + self.NEWLINE_BYTES)
-            self.proc.stdin.flush()
-            # self.proc= Popen('powershell.exe -NoLogo -NoExit', stdin=PIPE, stdout=PIPE, stderr=PIPE, shell=self.shell)
+            if not self.use_old_cmd:
+                self.proc = Popen('powershell.exe -NoLogo -NoExit', bufsize=0, stdin=PIPE, stdout=PIPE, stderr=PIPE,
+                                  shell=self.shell)
+            else:
+                # /K run command and remain (disables the banner)
+                self.proc = Popen('cmd.exe /K', bufsize=0, stdin=PIPE, stdout=PIPE, stderr=PIPE, shell=self.shell)
         else:
-            self.proc = Popen('/bin/bash', stdin=PIPE, stdout=PIPE, stderr=PIPE, shell=self.shell)
+            self.proc = Popen('/bin/bash', bufsize=0, stdin=PIPE, stdout=PIPE, stderr=PIPE, shell=self.shell)
 
         # Command count
         self.history = []
         self._finished_count = 0
 
         # Start stderr and stdout threads
-        self._th_out = threading.Thread(target=self.read_pipe, args=(self.proc.stdout, self.check_output))
+        check_output = partial(self.check_pipe, pipe_name="out")
+        self._th_out = threading.Thread(target=self.read_pipe, args=(self.proc.stdout, check_output))
         self._th_out.daemon = True
         self._th_out.start()
 
-        self._th_err = threading.Thread(target=self.read_pipe, args=(self.proc.stderr, self.check_error))
+        check_error = partial(self.check_pipe, pipe_name="err")
+        self._th_err = threading.Thread(target=self.read_pipe, args=(self.proc.stderr, check_error))
         self._th_err.daemon = True
         self._th_err.start()
         atexit.register(self.stop)
 
+        # Wait for process and read thread to start
         time.sleep(0.1)
+
+        if self.is_windows() and self.use_old_cmd:
+            # Allow echo results and remove from the command history
+            self.run('setlocal enabledelayedexpansion', block=True)
+            self._finished_count -= 1
+            self.history.pop()
 
         return self
 
@@ -748,10 +792,14 @@ class Shell(object):
             self._th_out.join(0)
         except:
             pass
+        finally:
+            self._th_out = None
         try:
             self._th_err.join(0)
         except:
             pass
+        finally:
+            self._th_err = None
         try:
             self.proc.stdin.close()
         except:
@@ -760,10 +808,9 @@ class Shell(object):
             self.proc.terminate()
         except:
             pass
-        self._th_out = None
-        self._th_err = None
-        self.proc = None
-        self.process = None
+        finally:
+            self.proc = None
+
         return self
 
     def close(self):
