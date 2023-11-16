@@ -725,8 +725,8 @@ class Shell(object):
             last_line_parsed = line != parsed
             if parsed:
                 try:
-                    self.current_command.add_pipe_data(pipe_name, parsed)
-                except (AttributeError, TypeError, ValueError, Exception):
+                    self.history[self.finished_count].add_pipe_data(pipe_name, parsed)
+                except (AttributeError, IndexError, TypeError, ValueError, Exception):
                     pass
             if exit_code is not None:
                 self.finish_command(exit_code)
