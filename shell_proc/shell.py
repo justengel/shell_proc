@@ -28,7 +28,10 @@ def write_buffer(fp, bts):
                 fp.write(bts.decode('utf-8', 'replace'))
             except:
                 pass
-    fp.flush()
+    try:
+        fp.flush()
+    except (AttributeError, Exception):
+        pass
 
 
 def quote(text):
@@ -688,17 +691,23 @@ class Shell(object):
         stdfile = getattr(self, "std"+pipe_name)
         last_line_parsed = False
         for line in lines:
+            # Write all output to stdout, stderr
+            try:
+                self.write_buffer(stdfile, line)
+            except(IndexError, KeyError, TypeError, ValueError, Exception):
+                pass
+
+            # ===== Parse data to add to command stdout, stderr =====
             # Skip blank lines from command echo
             if last_line_parsed and not line.strip():
                 continue
 
-            # ===== Check the finished flag =====
+            # Check the finished flag
             parsed, exit_code = self._parse_output(line)
             last_line_parsed = line != parsed
             if parsed:
                 try:
                     self.history[self._finished_count].add_pipe_data(pipe_name, parsed)
-                    self.write_buffer(stdfile, parsed)
                 except (IndexError, KeyError, TypeError, ValueError, Exception):
                     pass
             if exit_code is not None:
