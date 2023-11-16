@@ -155,6 +155,7 @@ class Command(object):
         self.stderr = stderr
         self.stdin = stdin  # Not really used. Maybe used with pipe?
         self.shell = shell
+        self._last_pipe_data_time = 0
 
     def cmdline(self):
         try:
@@ -319,7 +320,7 @@ class Shell(object):
 
         self._parallel_shell = []  # Keep parallel shells to close when we close
         self.history = []
-        self._finished_count = 0
+        self.finished_count = 0
         self._end_command = '=========== SHELL END COMMAND =========='
         self._end_command_bytes = self._end_command.encode('utf-8')
 
@@ -364,13 +365,30 @@ class Shell(object):
         """
         self._blocking = blocking
 
+    def finish_command(self, exit_code: int = -1, cmd: Command = None):
+        """Finish a command that was run.
+
+        This always increments the finished count to change the current command.
+
+        Args:
+            exit_code (int)[-1]: Exit code to set the command to
+            cmd (Command)[None]: Command to finish or use the current command if None
+        """
+        if cmd is None:
+            cmd = self.current_command
+        try:
+            cmd.exit_code = exit_code
+        except AttributeError:
+            pass
+        self.finished_count += 1
+
     @property
     def current_command(self):
         """Return the current command that is still running or was last_completed."""
         try:
             idx = -1
             if not self.is_finished():
-                idx = self._finished_count
+                idx = self.finished_count
             return self.history[idx]
         except (IndexError, KeyError, TypeError, AttributeError):
             return None
@@ -707,15 +725,11 @@ class Shell(object):
             last_line_parsed = line != parsed
             if parsed:
                 try:
-                    self.history[self._finished_count].add_pipe_data(pipe_name, parsed)
-                except (IndexError, KeyError, TypeError, ValueError, Exception):
+                    self.current_command.add_pipe_data(pipe_name, parsed)
+                except (AttributeError, TypeError, ValueError, Exception):
                     pass
             if exit_code is not None:
-                try:
-                    self.history[self._finished_count].exit_code = exit_code
-                    self._finished_count += 1
-                except (IndexError, KeyError, TypeError, ValueError, Exception):
-                    pass
+                self.finish_command(exit_code)
 
     def is_running(self, *additional, check_parallel=True, **kwargs):
         """Return if the continuous shell process is running."""
@@ -740,7 +754,7 @@ class Shell(object):
     def is_finished(self, *additional, check_parallel=True, **kwargs):
         """Return if all of the shell commands have finished"""
         # check if finished count is less than commands
-        if len(self.history) > self._finished_count:
+        if len(self.history) > self.finished_count:
             return False
 
         p_shells = list(additional)
@@ -773,7 +787,7 @@ class Shell(object):
 
         # Command count
         self.history = []
-        self._finished_count = 0
+        self.finished_count = 0
 
         # Start stderr and stdout threads
         check_output = partial(self.check_pipe, pipe_name="out")
@@ -793,7 +807,7 @@ class Shell(object):
         if self.is_windows() and self.use_old_cmd:
             # Allow echo results and remove from the command history
             self.run('setlocal enabledelayedexpansion', block=True)
-            self._finished_count -= 1
+            self.finished_count -= 1
             self.history.pop()
 
         return self
