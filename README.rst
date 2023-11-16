@@ -332,7 +332,7 @@ Shell code
 
         # Test again
         sh("python prompt_me.py", block=False)
-        sh.input("John Doe")
+        sh.input("John Doe", wait=True)
 
     # Shell.__exit__ will wait for final exit_code from sh(python prompt_me.py)
     print("Exited successfully!")
