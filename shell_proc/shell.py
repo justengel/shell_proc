@@ -534,14 +534,22 @@ class Shell(object):
 
         return cmd
 
-    def input(self, value):
-        """Input text into the process' stdin. Do not expect this to be a command and do not wait to finish."""
+    def input(self, value, wait: bool = False):
+        """Input text into the process' stdin. Do not expect this to be a command and do not wait to finish.
+
+        Args:
+            value (str/bytes): Value to pass into stdin.
+            wait (bool)[False]: If True wait for all previous commands to finish.
+        """
         if isinstance(value, str):
             value = value.encode()
         if not value.strip(b" ").endswith(b"\n"):
             value = value + self.NEWLINE_BYTES
         self.proc.stdin.write(value)
         self.proc.stdin.flush()
+
+        if wait:
+            self.wait()
 
     def pipe(self, pipe_text, *args, block=None, **kwargs):
         """Run the given task and pipe the given text to it.
