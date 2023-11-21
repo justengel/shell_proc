@@ -552,12 +552,13 @@ class ShellInterface(object):
             extra = extra.encode()
         if extra:
             extra = b' ' + extra
+        extra = bytes(extra or 0)
 
         if isinstance(end, str):
             end = end.encode()
         if end:
             end = b' ' + end
-        end += self.NEWLINE_BYTES
+        end = bytes(end or 0) + self.NEWLINE_BYTES
 
         # Convert to bytes
         if isinstance(value, str):
@@ -567,7 +568,7 @@ class ShellInterface(object):
         value = value.rstrip(b'\r\n')
 
         # Write to stdin
-        self.proc.stdin.write(value + bytes(extra or 0) + bytes(end or 0))
+        self.proc.stdin.write(value + extra + end)
         self.proc.stdin.flush()
 
         # Check for completion

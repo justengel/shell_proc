@@ -1,5 +1,5 @@
 name = 'shell_proc'
-version = '3.0.0'
+version = '3.0.1'
 description = 'Continuous shell process'
 url = 'https://github.com/justengel/shell_proc'
 author = 'Justin Engel'
