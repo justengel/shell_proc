@@ -10,6 +10,22 @@ Install
     pip install shell_proc
 
 
+3.0.0 Changes
+-------------
+Major changes! Too many differences between linux, windows cmd, and windows powershell.
+
+* I separated everything into separate classes.
+    * Shell is the default for the OS.
+    * Can specify BashShell (LinuxShell), WindowsPowerShell, and WindowsCmdShell.
+* Changed parallel function in an attempt to use background processes.
+    * Removed ParallelShell class
+* Added Command.raw_stdout and Command.raw_stderr.
+* Added Shell.is_windows_cmd and Shell.is_powershell.
+* Each shell has specific quote escape functions.
+    * This can be a giant pain and could be improved with regex
+* Added show_all_output and show_commands for how the output is displayed.
+* Added extra and end arguments to the run function to add more control to the commands.
+
 2.0.0 Changes
 -------------
 
@@ -227,48 +243,47 @@ Added support to run parallel subprocesses
     import time
     from shell_proc import Shell, python_args
 
-    with Shell(stdout=sys.stdout, stderr=sys.stderr) as sh:
-        p = sh.parallel(*(python_args('-c',
-                    'import os',
-                    'import time',
-                    "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i)) for i in range(10)))
-        sh.wait()  # or p.wait()
+    with Shell(stdout=sys.stdout, stderr=sys.stderr, python_call='python3') as sh:
+        python_call = "python3"
+        if sh.is_windows():
+            python_call = "../venv/Scripts/python"
+        cmd = sh.parallel(*(python_args('-c',
+                                      'import os',
+                                      'import time',
+                                      "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i),
+                                      python_call=python_call) for i in range(10)))
+        # Note: this will finish immediately and you should probably add an extra sleep like below
+        sh.wait()
         print('finished parallel')
         time.sleep(1)
+
+        background = {"end": "&", "extra": "; sleep 2"}
+        python_call = "python3"
+        if Shell.is_windows():
+            python_call = "../venv/Scripts/python"
+            if sh.is_powershell():
+                background = {"extra": "; Start-Sleep -Seconds 2"}
+            else:
+                background = {"extra": "& waitfor /t 2 shellproc 2>Nul"}
 
         tasks = []
         for i in range(10):
             if i == 3:
                 t = python_args('-c',
-                    'import os',
-                    'import time',
-                    'time.sleep(1)',
-                    "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i))
+                                'import os',
+                                'import time',
+                                'time.sleep(1)',
+                                "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i),
+                                python_call=python_call)
             else:
                 t = python_args('-c',
-                    'import os',
-                    'import time',
-                    "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i))
+                                'import os',
+                                'import time',
+                                "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i),
+                                python_call=python_call)
             tasks.append(t)
-        p = sh.parallel(*tasks)
-        p.wait()
-        print('finished parallel')
-        time.sleep(1)
-
-        with sh.parallel() as p:
-            for i in range(10):
-                if i == 3:
-                    p.python('-c',
-                             'import os',
-                             'import time',
-                             'time.sleep(1)',
-                             "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i))
-                else:
-                    p.python('-c',
-                             'import os',
-                             'import time',
-                             "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i))
-            # p.wait() on exit context
+        cmd = sh.parallel(*tasks, **background)
+        sh.wait()
         print('finished parallel')
 
 
@@ -289,7 +304,7 @@ new commands stdin.
 
         # Two Steps
         cmd = sh('dir')
-        results = cmd | 'find "run"'
+        results = sh('find "run"', pipe_text=cmd.stdout)
 
 
 Input Prompts

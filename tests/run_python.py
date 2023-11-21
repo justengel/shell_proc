@@ -34,7 +34,7 @@ def run_command():
     if Shell.is_linux():
         python_args.PYTHON = 'python3'
 
-    with Shell(stdout=sys.stdout, stderr=sys.stderr) as sh:
+    with Shell(stdout=sys.stdout, stderr=sys.stderr, show_all_output=True) as sh:
         if sh.is_linux():
             sh('alias python=python3')
 

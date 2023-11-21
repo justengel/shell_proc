@@ -140,14 +140,27 @@ def run_parallel():
     from shell_proc import Shell, python_args
 
     with Shell(stdout=sys.stdout, stderr=sys.stderr, python_call='python3') as sh:
-        p = sh.parallel(*(python_args('-c',
+        python_call = "python3"
+        if sh.is_windows():
+            python_call = "../venv/Scripts/python"
+        cmd = sh.parallel(*(python_args('-c',
                                       'import os',
                                       'import time',
                                       "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i),
-                                      python_call='python3') for i in range(10)))
-        sh.wait()  # or p.wait()
+                                      python_call=python_call) for i in range(10)))
+        # Note: this will finish immediately and you should probably add an extra sleep like below
+        sh.wait()
         print('finished parallel')
         time.sleep(1)
+
+        background = {"end": "&", "extra": "; sleep 2"}
+        python_call = "python3"
+        if Shell.is_windows():
+            python_call = "../venv/Scripts/python"
+            if sh.is_powershell():
+                background = {"extra": "; Start-Sleep -Seconds 2"}
+            else:
+                background = {"extra": "& waitfor /t 2 shellproc 2>Nul"}
 
         tasks = []
         for i in range(10):
@@ -157,34 +170,16 @@ def run_parallel():
                                 'import time',
                                 'time.sleep(1)',
                                 "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i),
-                                python_call='python3')
+                                python_call=python_call)
             else:
                 t = python_args('-c',
                                 'import os',
                                 'import time',
                                 "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i),
-                                python_call='python3')
+                                python_call=python_call)
             tasks.append(t)
-        p = sh.parallel(*tasks)
-        p.wait()
-        print('finished parallel')
-        time.sleep(1)
-
-        with sh.parallel() as p:
-            # python3 from shell
-            for i in range(10):
-                if i == 3:
-                    p.python('-c',
-                             'import os',
-                             'import time',
-                             'time.sleep(1)',
-                             "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i))
-                else:
-                    p.python('-c',
-                             'import os',
-                             'import time',
-                             "print('My ID:', {id}, 'My PID:', os.getpid(), time.time())".format(id=i))
-            # p.wait() on exit context
+        cmd = sh.parallel(*tasks, **background)
+        sh.wait()
         print('finished parallel')
 
 
@@ -222,10 +217,10 @@ def run_input():
 
 
 if __name__ == '__main__':
-    run_simple_result()
-    run_context_manager()
-    run_non_blocking()
-    run_manual()
-    run_python()
+    # run_simple_result()
+    # run_context_manager()
+    # run_non_blocking()
+    # run_manual()
+    # run_python()
     run_parallel()
-    run_input()
+    # run_input()

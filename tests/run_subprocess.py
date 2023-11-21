@@ -27,7 +27,7 @@ def run_shell():
     import sys
     with Shell(stdout=sys.stdout, stderr=sys.stderr) as sh:
         sh('cd ./storage')
-        sh('exit()')
+        sh('exit')
         try:
             sh('dir')
             raise AssertionError('Shell already closed!')
@@ -37,12 +37,15 @@ def run_shell():
 
 def run_command_pipe():
     import sys
-    from shell_proc import Shell, ShellExit, shell_args, quote
+    from shell_proc import Shell, ShellExit, shell_args
 
-    with Shell(stdout=sys.stdout, stderr=sys.stderr) as sh:
+    with Shell(stdout=sys.stdout, stderr=sys.stderr, show_all_output=True) as sh:
         # One step
         if sh.is_windows():
-            results = sh('dir') | 'find "run"'  # Hard to tell where find output starts
+            if sh.is_powershell():
+                results = sh('dir') | 'findstr "run"'  # Hard to tell where find output starts
+            else:
+                results = sh('dir') | 'find "run"'  # Hard to tell where find output starts
         else:
             results = sh('ls -al') | 'grep "run"'
         assert 'run_subprocess.py' in results.stdout, results.stdout
@@ -51,11 +54,14 @@ def run_command_pipe():
         if sh.is_windows():
             cmd = sh('dir')
             print('\nRUN PIPE')
-            results = cmd | 'find "run"'
+            if sh.is_powershell():
+                results = sh('findstr "run"', pipe_text=cmd.stdout)
+            else:
+                results = sh('find "run"', pipe_text=cmd.stdout)
         else:
             cmd = sh('ls -al')
             print('\nRUN PIPE')
-            results = cmd | 'grep "run"'
+            results = sh('grep "run"', pipe_text=cmd.stdout)
         assert 'run_subprocess.py' in results.stdout
 
 
