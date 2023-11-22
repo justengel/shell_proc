@@ -217,10 +217,10 @@ def run_input():
 
 
 if __name__ == '__main__':
-    # run_simple_result()
-    # run_context_manager()
-    # run_non_blocking()
-    # run_manual()
-    # run_python()
+    run_simple_result()
+    run_context_manager()
+    run_non_blocking()
+    run_manual()
+    run_python()
     run_parallel()
-    # run_input()
+    run_input()
