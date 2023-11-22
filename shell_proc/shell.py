@@ -729,8 +729,9 @@ class ShellInterface(object):
                 try:
                     data = buffer.read1()
                 except (BlockingIOError, OSError):  # Windows non-blocking can cause OSError
-                    no_read_count += 1  # Process buffer data without NEWLINE after a few attempts
                     data = b''
+                if not data:
+                    no_read_count += 1  # Process buffer data without NEWLINE after a few attempts
 
                 has_data = len(data) > 0
                 if has_data or no_read_count > 1:
