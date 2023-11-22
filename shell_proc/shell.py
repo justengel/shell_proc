@@ -468,7 +468,7 @@ class ShellInterface(object):
         cmd = 'echo "{end_cmd} {report}"'.format(end_cmd=self.end_command, report='$?')
         return cmd.encode()
 
-    def _run(self, cmd, pipe_text='', extra=b'', end=b'', **kwargs):
+    def _run(self, cmd, pipe_text='', extra=b'', echo_sep=None, end=b'', **kwargs):
         """Run the given text command."""
         if extra:
             extra = b' ' + extra
@@ -486,12 +486,16 @@ class ShellInterface(object):
 
         # Run the command
         echo = self.get_echo_results()
-        self.proc.stdin.write(bytes(cmd) + extra + b" ; " + echo + end)
+        if not echo_sep:
+            echo_sep = b' ; '
+        elif not isinstance(echo_sep, (bytes, bytearray)):
+            echo_sep = str(echo_sep).encode()
+        self.proc.stdin.write(bytes(cmd) + extra + echo_sep + echo + end)
         self.proc.stdin.flush()
 
         return cmd
 
-    def run(self, *args, pipe_text='', block=None, extra=None, end=None, **kwargs):
+    def run(self, *args, pipe_text='', block=None, extra=None, echo_sep=None, end=None, **kwargs):
         """Run the given task.
 
         Args:
@@ -499,6 +503,7 @@ class ShellInterface(object):
             pipe_text (str)['']: Text to pipe into the task
             block (float/bool)[None]: If None use Shell setting else sleep the number of seconds given.
             extra (str/bytes)[None]: Extra arguments or commands before the echo result.
+            echo_sep (str/bytes)[None]: Echo results separator. Typically ; or &.
             end (str/bytes)[None]: Set end of the command before the newline. Useful for '&' background
             **kwargs (dict/object): Keyword arguments to combine into a runnable string with "--key value".
 
@@ -526,7 +531,7 @@ class ShellInterface(object):
             extra = extra.encode()
         if isinstance(end, str):
             end = end.encode()
-        cmd = self._run(cmd, pipe_text=pipe_text, extra=bytes(extra or 0), end=bytes(end or 0))
+        cmd = self._run(cmd, pipe_text=pipe_text, extra=bytes(extra or 0), echo_sep=echo_sep, end=bytes(end or 0))
 
         # Check for completion
         if block is None:
@@ -620,7 +625,7 @@ class ShellInterface(object):
         # Run the command
         return self.run(arg, pipe_text=pipe_text, block=block, extra=extra, end=end)
 
-    def _run_parallel(self, cmd, pipe_text='', extra=b'', end=b'', **kwargs):
+    def _run_parallel(self, cmd, pipe_text='', extra=b'', echo_sep=None, end=b'', **kwargs):
         """Run the given text command."""
         if extra:
             extra = b' ' + extra
@@ -637,12 +642,16 @@ class ShellInterface(object):
 
         # Run the command
         echo = self.get_echo_results()
-        self.proc.stdin.write(bytes(cmd) + extra + b' ; ' + echo + end)
+        if not echo_sep:
+            echo_sep = b' ; '
+        elif not isinstance(echo_sep, (bytes, bytearray)):
+            echo_sep = str(echo_sep).encode()
+        self.proc.stdin.write(bytes(cmd) + extra + echo_sep + echo + end)
         self.proc.stdin.flush()
 
         return cmd
 
-    def parallel(self, *scripts, pipe_text='', block=None, extra=None, end=None, **kwargs):
+    def parallel(self, *scripts, pipe_text='', block=None, extra=None, echo_sep=None, end=None, **kwargs):
         """Run the given scripts in parallel.
 
         Args:
@@ -650,6 +659,7 @@ class ShellInterface(object):
             pipe_text (str)['']: Text to pipe into the task
             block (float/bool)[None]: If None use Shell setting else sleep the number of seconds given.
             extra (str/bytes)[None]: Extra arguments or commands before the echo result.
+            echo_sep (str/bytes)[None]: Echo results separator. Typically ; or &.
             end (str/bytes)[None]: Set end of the command before the newline. Useful for '&' background
             **kwargs (dict/object): Additional keyword arguments.
 
@@ -670,11 +680,17 @@ class ShellInterface(object):
         self.history.append(cmd)
 
         # Run the command
-        if isinstance(extra, str):
-            extra = extra.encode()
-        if isinstance(end, str):
-            end = end.encode()
-        cmd = self._run_parallel(cmd, pipe_text=pipe_text, extra=bytes(extra or 0), end=bytes(end or 0))
+        if not isinstance(extra, (bytes, bytearray)):
+            extra = str(extra).encode()
+        if not isinstance(end, (bytes, bytearray)):
+            end = str(end).encode()
+        cmd = self._run_parallel(
+            cmd,
+            pipe_text=pipe_text,
+            extra=bytes(extra or 0),
+            echo_sep=echo_sep,
+            end=bytes(end or 0)
+        )
 
         # Check for completion
         if block is None:
@@ -988,7 +1004,7 @@ class BashShell(ShellInterface):
 
     get_echo_results = _linux_get_echo_results
 
-    def _linux_run(self, cmd, pipe_text='', extra=b'', end=b'', **kwargs):
+    def _linux_run(self, cmd, pipe_text='', extra=b'', echo_sep=None, end=b'', **kwargs):
         """Run the given text command."""
         if extra:
             extra = b' ' + extra
@@ -1014,13 +1030,17 @@ class BashShell(ShellInterface):
         # Print commands if configured.
         # Bash does not send commands to stdout by default. Windows does.
         echo = self.get_echo_results()
+        if not echo_sep:
+            echo_sep = b' ; '
+        elif not isinstance(echo_sep, (bytes, bytearray)):
+            echo_sep = str(echo_sep).encode()
         if self.show_all_output:
-            self.write_buffer(self.stdout, bytes(cmd) + extra + b" ; " + echo + end)
+            self.write_buffer(self.stdout, bytes(cmd) + extra + echo_sep + echo + end)
         elif self.show_commands:
             self.write_buffer(self.stdout, bytes(cmd) + extra + end)
 
         # Run the command
-        self.proc.stdin.write(bytes(cmd) + extra + b" ; " + echo + end)
+        self.proc.stdin.write(bytes(cmd) + extra + echo_sep + echo + end)
         self.proc.stdin.flush()
 
         return cmd
@@ -1093,7 +1113,7 @@ class WindowsPowerShell(ShellInterface):
 
     get_echo_results = _powershell_get_echo_results
 
-    def _powershell_run(self, cmd, pipe_text='', extra=b'', end=b'', **kwargs):
+    def _powershell_run(self, cmd, pipe_text='', extra=b'', echo_sep=None, end=b'', **kwargs):
         """Run the given text command."""
         if extra:
             extra = b' ' + extra
@@ -1113,7 +1133,11 @@ class WindowsPowerShell(ShellInterface):
 
         # Run the command
         echo = self.get_echo_results()
-        self.proc.stdin.write(bytes(cmd) + extra + b" ; " + echo + end)
+        if not echo_sep:
+            echo_sep = b' ; '
+        elif not isinstance(echo_sep, (bytes, bytearray)):
+            echo_sep = str(echo_sep).encode()
+        self.proc.stdin.write(bytes(cmd) + extra + echo_sep + echo + end)
         self.proc.stdin.flush()
 
         return cmd
@@ -1182,7 +1206,7 @@ class WindowsCmdShell(ShellInterface):
 
     get_echo_results = _windows_cmd_get_echo_results
 
-    def _windows_cmd_run(self, cmd, pipe_text='', extra=b'', end=b'', **kwargs):
+    def _windows_cmd_run(self, cmd, pipe_text='', extra=b'', echo_sep=None, end=b'', **kwargs):
         """Run the given text command."""
         if extra:
             extra = b' ' + extra
@@ -1210,13 +1234,17 @@ class WindowsCmdShell(ShellInterface):
         # Print commands if configured.
         # Bash does not send commands to stdout by default. Windows does.
         echo = self.get_echo_results()
+        if not echo_sep:
+            echo_sep = b' & '
+        elif not isinstance(echo_sep, (bytes, bytearray)):
+            echo_sep = str(echo_sep).encode()
         if self.show_all_output:
-            self.write_buffer(self.stdout, bytes(cmd) + extra + b" & " + echo + end)
+            self.write_buffer(self.stdout, bytes(cmd) + extra + echo_sep + echo + end)
         elif self.show_commands:
             self.write_buffer(self.stdout, bytes(cmd) + extra + end)
 
         # Run the command
-        self.proc.stdin.write(bytes(cmd) + extra + b" & " + echo + end)
+        self.proc.stdin.write(bytes(cmd) + extra + echo_sep + echo + end)
         self.proc.stdin.flush()
 
         return cmd
