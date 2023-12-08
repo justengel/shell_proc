@@ -737,8 +737,7 @@ class ShellInterface(object):
                 if has_data or no_read_count > 1:
                     no_read_count = 0
                     callback(data)
-                else:
-                    time.sleep(0.1)
+                time.sleep(0.01)  # Since we are non-blocking we want some delay
             except BrokenPipeError:
                 break
 
