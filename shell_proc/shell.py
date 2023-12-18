@@ -207,7 +207,7 @@ class Command(object):
 
     def last_read_timeout(self, timeout: float = 1.1):
         """Return if the last read data time is greater than or equal to the given timeout"""
-        return (time.time() - self._last_pipe_data_time) >= timeout
+        return self._last_pipe_data_time != 0 and (time.time() - self._last_pipe_data_time) >= timeout
 
     def has_output(self):
         """Return if this command has any stdout."""
