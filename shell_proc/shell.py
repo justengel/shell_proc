@@ -205,6 +205,10 @@ class Command(object):
         self._last_pipe_data_time = time.time()
         setattr(self, pipe_name, getattr(self, 'raw_' + pipe_name, '') + data)
 
+    def last_read_timeout(self, timeout: float = 1.1):
+        """Return if the last read data time is greater than or equal to the given timeout"""
+        return (time.time() - self._last_pipe_data_time) >= timeout
+
     def has_output(self):
         """Return if this command has any stdout."""
         return bool(self.stdout)
@@ -722,7 +726,7 @@ class ShellInterface(object):
         set_non_blocking(pipe)
         buffer = io.BufferedReader(pipe)
 
-        no_read_count = 0
+        read_timeouts = 0
         while True:
             try:
                 # Read all data from the buffer 1 time non-blocking
@@ -730,12 +734,15 @@ class ShellInterface(object):
                     data = buffer.read1()
                 except (BlockingIOError, OSError):  # Windows non-blocking can cause OSError
                     data = b''
-                if not data:
-                    no_read_count += 1  # Process buffer data without NEWLINE after a few attempts
 
-                has_data = len(data) > 0
-                if has_data or no_read_count > 1:
-                    no_read_count = 0
+                # Process buffer data without NEWLINE after a few attempts
+                if not data:
+                    read_timeouts += 1
+                else:
+                    read_timeouts = 0
+
+                # Process data or process buffer if missing more than 1 read
+                if data or read_timeouts == 2:
                     callback(data)
                 time.sleep(0.01)  # Since we are non-blocking we want some delay
             except BrokenPipeError:
