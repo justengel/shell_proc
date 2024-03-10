@@ -861,10 +861,14 @@ class ShellInterface(object):
             p_shells.extend(self._parallel_shell)
         return all((p.is_finished() for p in p_shells if hasattr(p, 'is_finished')))
 
-    def wait(self, *additional, check_parallel=True, **kwargs):
+    def wait(self, *additional, timeout: float = float('inf'), check_parallel=True, **kwargs):
         """Wait until all of the commands are finished or until the process exits."""
-        while self.is_proc_running(*additional, check_parallel=check_parallel, **kwargs) and \
-                not self.is_finished(*additional, check_parallel=check_parallel, **kwargs):
+        start = time.time()
+        while (
+            time.time() - start < timeout and
+            self.is_proc_running(*additional, check_parallel=check_parallel, **kwargs) and
+            not self.is_finished(*additional, check_parallel=check_parallel, **kwargs)
+        ):
             time.sleep(0.1)
         return self
 
