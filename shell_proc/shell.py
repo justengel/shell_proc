@@ -205,6 +205,10 @@ class Command(object):
         self._last_pipe_data_time = time.time()
         setattr(self, pipe_name, getattr(self, 'raw_' + pipe_name, '') + data)
 
+    def reset_last_read_timeout(self):
+        """Reset the last read data time."""
+        self._last_pipe_data_time = 0
+
     def last_read_timeout(self, timeout: float = 1.1):
         """Return if the last read data time is greater than or equal to the given timeout"""
         return self._last_pipe_data_time != 0 and (time.time() - self._last_pipe_data_time) >= timeout
@@ -472,8 +476,12 @@ class ShellInterface(object):
         cmd = 'echo "{end_cmd} {report}"'.format(end_cmd=self.end_command, report='$?')
         return cmd.encode()
 
-    def echo_results(self):
+    def echo_results(self, reset_last_read_timeout: bool = True):
         """Send the echo command to find the results of the previous command."""
+        cmd = self.current_command
+        if reset_last_read_timeout and cmd is not None and not cmd.is_finished():
+            cmd.reset_last_read_timeout()
+
         echo = self.get_echo_results_cmd()
         self.proc.stdin.write(echo + self.NEWLINE_BYTES)
         self.proc.stdin.flush()
